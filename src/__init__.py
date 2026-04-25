@@ -1,0 +1,2 @@
+"""Soloa Reddit assistant package."""
+

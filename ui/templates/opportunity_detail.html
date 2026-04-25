@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="detail-head">
+  <h2>{{ opportunity.title }}</h2>
+  <p><a href="{{ opportunity.url }}" target="_blank" rel="noreferrer">Open Reddit Thread</a></p>
+  <p>Subreddit: <strong>r/{{ opportunity.subreddit }}</strong> | Score: <strong>{{ opportunity.score }}</strong> | Status: <span class="pill {{ opportunity.status }}">{{ opportunity.status }}</span></p>
+</section>
+
+<section class="detail-grid">
+  <article class="panel">
+    <h3>Post Context</h3>
+    <p>{{ opportunity.body }}</p>
+    <h3>Why This Was Flagged</h3>
+    <ul>
+      {% for reason in opportunity.reasons %}
+      <li>{{ reason }}</li>
+      {% endfor %}
+    </ul>
+  </article>
+
+  <article class="panel">
+    <h3>Suggested Drafts</h3>
+    <ol>
+      {% for draft in opportunity.drafts %}
+      <li>{{ draft }}</li>
+      {% endfor %}
+    </ol>
+    <form method="post" action="{{ url_for('approve', opportunity_id=opportunity.id) }}">
+      <label for="note-approve">Approval note</label>
+      <textarea id="note-approve" name="note" rows="3" placeholder="Optional note about why this is safe and useful"></textarea>
+      <button class="btn approve" type="submit">Approve</button>
+    </form>
+    <form method="post" action="{{ url_for('reject', opportunity_id=opportunity.id) }}">
+      <label for="note-reject">Rejection note</label>
+      <textarea id="note-reject" name="note" rows="3" placeholder="Optional note about policy or quality issue"></textarea>
+      <button class="btn reject" type="submit">Reject</button>
+    </form>
+  </article>
+</section>
+{% endblock %}
+

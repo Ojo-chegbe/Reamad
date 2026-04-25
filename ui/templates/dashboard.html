@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="stats-grid">
+  <article class="stat-card">
+    <span>Pending</span>
+    <strong>{{ summary.pending }}</strong>
+  </article>
+  <article class="stat-card">
+    <span>Approved</span>
+    <strong>{{ summary.approved }}</strong>
+  </article>
+  <article class="stat-card">
+    <span>Rejected</span>
+    <strong>{{ summary.rejected }}</strong>
+  </article>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Opportunity Inbox</h2>
+    <form method="get" class="filter-form">
+      <label for="status">Status</label>
+      <select name="status" id="status" onchange="this.form.submit()">
+        <option value="" {% if selected_status == "all" %}selected{% endif %}>All</option>
+        <option value="pending" {% if selected_status == "pending" %}selected{% endif %}>Pending</option>
+        <option value="approved" {% if selected_status == "approved" %}selected{% endif %}>Approved</option>
+        <option value="rejected" {% if selected_status == "rejected" %}selected{% endif %}>Rejected</option>
+      </select>
+    </form>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Subreddit</th>
+        <th>Title</th>
+        <th>Score</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for opp in opportunities %}
+      <tr>
+        <td><a href="{{ url_for('opportunity_detail', opportunity_id=opp.id) }}">{{ opp.id }}</a></td>
+        <td>r/{{ opp.subreddit }}</td>
+        <td>{{ opp.title }}</td>
+        <td>{{ opp.score }}</td>
+        <td><span class="pill {{ opp.status }}">{{ opp.status }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
