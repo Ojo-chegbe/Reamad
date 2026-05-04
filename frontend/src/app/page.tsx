@@ -57,7 +57,14 @@ interface AuditLog {
   created_at: string;
 }
 
+interface BotProfile {
+  subreddits: string[];
+  keywords: string[];
+  knowledge_block: string;
+}
+
 type AuditActionFilter = "all" | "approved" | "rejected";
+type ConfigTab = "profile" | "playbooks";
 
 export default function Gatekeeper() {
   const [currentView, setCurrentView] = useState("triage");
@@ -74,10 +81,20 @@ export default function Gatekeeper() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditActionFilter, setAuditActionFilter] = useState<AuditActionFilter>("approved");
   
+  const [configTab, setConfigTab] = useState<ConfigTab>("profile");
+  const [profile, setProfile] = useState<BotProfile | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState("");
+
   const [note, setNote] = useState<string>("");
   const [botRunning, setBotRunning] = useState<boolean>(false);
   const [triageMenuOpen, setTriageMenuOpen] = useState<boolean>(false);
   const [runtimeLoading, setRuntimeLoading] = useState<boolean>(false);
+
+  const [subredditInput, setSubredditInput] = useState("");
+  const [subredditSuggestions, setSubredditSuggestions] = useState<string[]>([]);
+  const [suggestingKeywords, setSuggestingKeywords] = useState(false);
+  const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([]);
 
   const fetchOpportunities = async () => {
     setLoading(true);
@@ -142,6 +159,41 @@ export default function Gatekeeper() {
     }
   };
 
+  const fetchProfile = async () => {
+    try {
+      const res = await fetch("/api/profile");
+      if (!res.ok) throw new Error("Failed to fetch profile");
+      const data = await res.json();
+      setProfile(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const saveProfile = async () => {
+    if (!profile) return;
+    setSavingProfile(true);
+    setProfileMessage("");
+    try {
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profile)
+      });
+      if (res.ok) {
+        setProfileMessage("Profile saved successfully. Engine restarting...");
+        setTimeout(() => setProfileMessage(""), 5000);
+      } else {
+        setProfileMessage("Error saving profile.");
+      }
+    } catch (err) {
+      console.error(err);
+      setProfileMessage("Error saving profile.");
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => {
       if (currentView === "triage") {
@@ -149,6 +201,7 @@ export default function Gatekeeper() {
         void fetchRuntimeStatus();
       } else if (currentView === "config") {
         void fetchPlaybooks();
+        void fetchProfile();
       } else if (currentView === "approvals") {
         void fetchAuditLogs();
       }
@@ -170,6 +223,33 @@ export default function Gatekeeper() {
       }
     };
   }, [currentView, filter, botRunning]);
+
+  useEffect(() => {
+    if (!subredditInput || subredditInput.length < 2) {
+      setSubredditSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search_subreddits?q=${encodeURIComponent(subredditInput)}`);
+        const data = await res.json();
+        setSubredditSuggestions(data.results || []);
+      } catch(e) {}
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [subredditInput]);
+
+  const generateKeywords = async () => {
+    setSuggestingKeywords(true);
+    try {
+      const res = await fetch("/api/suggest_keywords", { method: "POST" });
+      const data = await res.json();
+      if (data.suggestions) {
+        setKeywordSuggestions(data.suggestions);
+      }
+    } catch(e) {}
+    setSuggestingKeywords(false);
+  };
 
   const toggleRuntime = async () => {
     setRuntimeLoading(true);
@@ -526,79 +606,285 @@ export default function Gatekeeper() {
           <>
             <div className="content-header">
               <div className="filters">
-                <div style={{ padding: "0.5rem 1rem", fontWeight: "600", color: "var(--text-primary)" }}>
-                  <Book size={14} style={{ display: "inline", marginRight: "0.5rem", position: "relative", top: "2px" }}/> PLAYBOOKS CONFIGURATION
-                </div>
+                <button
+                  className={`filter-btn ${configTab === "profile" ? "active" : ""}`}
+                  onClick={() => setConfigTab("profile")}
+                >
+                  BOT PROFILE
+                </button>
+                <button
+                  className={`filter-btn ${configTab === "playbooks" ? "active" : ""}`}
+                  onClick={() => setConfigTab("playbooks")}
+                >
+                  PLAYBOOKS
+                </button>
               </div>
-              <div className="processing-rate">SUBREDDITS: {playbooks.length}</div>
             </div>
 
-            <div className="triage-layout">
-              {/* Inbox List (Left Pane) */}
-              <div className="inbox-list">
-                {playbooks.length === 0 ? (
-                  <div style={{ padding: "2rem", color: "var(--text-muted)", textAlign: "center" }}>No playbooks found.</div>
-                ) : (
-                  playbooks.map((pb) => (
-                    <div 
-                      key={pb.subreddit} 
-                      className={`list-item ${selectedSubreddit === pb.subreddit ? "active" : ""}`}
-                      onClick={() => setSelectedSubreddit(pb.subreddit)}
-                    >
-                      <div className="list-item-header">
-                        <span className="list-item-meta" style={{ fontWeight: 600 }}>r/{pb.subreddit}</span>
-                      </div>
-                      <div className="list-item-title" style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-                        Updated: {new Date(pb.updated_at).toLocaleDateString()}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* Detail View (Right Pane) */}
-              <div className="inbox-detail">
-                {!selectedSubreddit ? (
-                  <div className="empty-state">
-                    <div>Select a subreddit to view its rules and playbooks</div>
-                  </div>
-                ) : (() => {
-                  const activePb = playbooks.find(p => p.subreddit === selectedSubreddit);
-                  if (!activePb) return null;
-                  return (
-                    <div className="detail-scroll-area">
-                      <div className="detail-header-meta">
-                        <span className="detail-subreddit">r/{activePb.subreddit}</span>
-                        <span className="detail-score">Last updated: {new Date(activePb.updated_at).toLocaleString()}</span>
-                        <a href={`https://reddit.com/r/${activePb.subreddit}`} target="_blank" rel="noopener noreferrer" className="detail-link">
-                          Visit Subreddit <ArrowUpRight size={14} style={{ marginLeft: "4px" }}/>
-                        </a>
+            {configTab === "profile" && profile && (
+              <div className="scroll-container" style={{ paddingBottom: "100px" }}>
+                <h2 style={{ fontSize: "1.2rem", color: "var(--text-primary)", marginBottom: "2rem" }}>Bot Identity & Engine Rules</h2>
+                
+                <div className="profile-grid">
+                  <div className="profile-column" style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
+                    <div className="profile-card">
+                      <div>
+                        <div className="profile-card-title">
+                          Target Subreddits
+                        </div>
+                        <div className="profile-card-desc">
+                          The communities the bot will actively monitor for pain points.
+                        </div>
                       </div>
                       
-                      <h1 className="detail-title">Subreddit Rules & Notes</h1>
-
-                      <div className="ai-insight-box">
-                        <div className="insight-header">
-                          <CheckSquare size={14} /> COMMUNITY RULES
-                        </div>
-                        <div className="insight-content" style={{ whiteSpace: "pre-wrap", lineHeight: "1.6" }}>
-                          {activePb.rules_text || "No rules available."}
-                        </div>
-                      </div>
-
-                      <div className="ai-insight-box" style={{ background: "transparent", marginTop: "1rem" }}>
-                        <div className="insight-header">
-                          <MessageSquareDiff size={14} /> PLAYBOOK NOTES
-                        </div>
-                        <div className="insight-content">
-                          {activePb.notes ? activePb.notes : <span style={{ color: "var(--text-muted)" }}>No additional operator notes.</span>}
+                      <div className="tag-input-container">
+                        <div className="tags-wrapper">
+                          {profile.subreddits.map((tag, i) => (
+                            <span key={i} className="tag-pill">
+                              {tag}
+                              <button 
+                                type="button" 
+                                onClick={() => setProfile({...profile, subreddits: profile.subreddits.filter((_, idx) => idx !== i)})} 
+                                className="tag-remove-btn"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          <div style={{ position: "relative", flex: 1, minWidth: "140px" }}>
+                            <input
+                              type="text"
+                              className="tag-input-field"
+                              placeholder="Search subreddit..."
+                              value={subredditInput}
+                              onChange={(e) => setSubredditInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && subredditInput.trim()) {
+                                  e.preventDefault();
+                                  const val = subredditInput.trim();
+                                  if (!profile.subreddits.includes(val)) {
+                                    setProfile({...profile, subreddits: [...profile.subreddits, val]});
+                                  }
+                                  setSubredditInput("");
+                                }
+                              }}
+                              style={{ width: "100%" }}
+                            />
+                            {subredditSuggestions.length > 0 && (
+                              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: "4px", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden", zIndex: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.5)" }}>
+                                {subredditSuggestions.map(sub => (
+                                  <div 
+                                    key={sub}
+                                    style={{ padding: "8px 12px", fontSize: "0.85rem", cursor: "pointer", color: "var(--text-primary)" }}
+                                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "var(--bg-card-hover)"}
+                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+                                    onClick={() => {
+                                      if (!profile.subreddits.includes(sub)) {
+                                        setProfile({...profile, subreddits: [...profile.subreddits, sub]});
+                                      }
+                                      setSubredditInput("");
+                                      setSubredditSuggestions([]);
+                                    }}
+                                  >
+                                    r/{sub}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  );
-                })()}
+
+                    <div className="profile-card">
+                      <div>
+                        <div className="profile-card-title">
+                          Pain Keywords
+                        </div>
+                        <div className="profile-card-desc">
+                          Specific phrases that indicate a user is frustrated or struggling.
+                        </div>
+                      </div>
+                      
+                      <div className="tag-input-container">
+                        <div className="tags-wrapper">
+                          {profile.keywords.map((tag, i) => (
+                            <span key={i} className="tag-pill">
+                              {tag}
+                              <button 
+                                type="button" 
+                                onClick={() => setProfile({...profile, keywords: profile.keywords.filter((_, idx) => idx !== i)})} 
+                                className="tag-remove-btn"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          <input
+                            type="text"
+                            className="tag-input-field"
+                            placeholder="Add keyword & press Enter..."
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                                e.preventDefault();
+                                const val = e.currentTarget.value.trim();
+                                if (!profile.keywords.includes(val)) {
+                                  setProfile({...profile, keywords: [...profile.keywords, val]});
+                                }
+                                e.currentTarget.value = "";
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                      
+                      {keywordSuggestions.length > 0 && (
+                        <div style={{ marginTop: "0.5rem" }}>
+                          <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.5rem", fontWeight: "600", textTransform: "uppercase" }}>AI SUGGESTIONS:</div>
+                          <div className="tags-wrapper">
+                            {keywordSuggestions.map((sug, i) => (
+                              <span 
+                                key={i} 
+                                className="tag-pill" 
+                                style={{ cursor: "pointer", borderStyle: "dashed" }}
+                                onClick={() => {
+                                  if (!profile.keywords.includes(sug)) {
+                                    setProfile({...profile, keywords: [...profile.keywords, sug]});
+                                  }
+                                  setKeywordSuggestions(keywordSuggestions.filter(k => k !== sug));
+                                }}
+                                title="Click to add"
+                              >
+                                + {sug}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <button 
+                        className="btn btn-open" 
+                        style={{ alignSelf: "flex-start", padding: "0.5rem 1rem", fontSize: "0.75rem", marginTop: "auto" }}
+                        onClick={generateKeywords}
+                        disabled={suggestingKeywords}
+                      >
+                        {suggestingKeywords ? "ANALYZING KNOWLEDGE..." : "AI SUGGEST KEYWORDS"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="profile-column" style={{ display: "flex", flexDirection: "column" }}>
+                    <div className="profile-card" style={{ flex: 1 }}>
+                      <div>
+                        <div className="profile-card-title">
+                          Knowledge Block (System Prompt)
+                        </div>
+                        <div className="profile-card-desc">
+                          The core product context fed to the LLM. Define your product's features, tone of voice, and Reddit positioning strategy here.
+                        </div>
+                      </div>
+
+                      <div className="code-editor-wrapper">
+                        <div className="code-editor-header">
+                          <span>soloa_knowledge.md</span>
+                          <span style={{ color: "var(--text-muted)" }}>MARKDOWN</span>
+                        </div>
+                        <textarea 
+                          className="code-editor-textarea"
+                          value={profile.knowledge_block}
+                          onChange={(e) => setProfile({ ...profile, knowledge_block: e.target.value })}
+                          spellCheck="false"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={`profile-action-bar visible`}>
+                  <div className="profile-unsaved-text">
+                    <span style={{ color: profileMessage ? (profileMessage.includes("Error") ? "var(--color-danger)" : "var(--color-success)") : "var(--text-muted)" }}>
+                      {profileMessage || "Remember to save your changes to update the engine."}
+                    </span>
+                  </div>
+                  <button 
+                    className="btn btn-approve" 
+                    onClick={saveProfile}
+                    disabled={savingProfile}
+                  >
+                    {savingProfile ? "SAVING & RESTARTING..." : "SAVE CONFIGURATION"}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
+
+            {configTab === "playbooks" && (
+              <div className="triage-layout" style={{ height: "calc(100vh - 120px)" }}>
+                {/* Inbox List (Left Pane) */}
+                <div className="inbox-list">
+                  {playbooks.length === 0 ? (
+                    <div style={{ padding: "2rem", color: "var(--text-muted)", textAlign: "center" }}>No playbooks found.</div>
+                  ) : (
+                    playbooks.map((pb) => (
+                      <div 
+                        key={pb.subreddit} 
+                        className={`list-item ${selectedSubreddit === pb.subreddit ? "active" : ""}`}
+                        onClick={() => setSelectedSubreddit(pb.subreddit)}
+                      >
+                        <div className="list-item-header">
+                          <span className="list-item-meta" style={{ fontWeight: 600 }}>r/{pb.subreddit}</span>
+                        </div>
+                        <div className="list-item-title" style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                          Updated: {new Date(pb.updated_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Detail View (Right Pane) */}
+                <div className="inbox-detail">
+                  {!selectedSubreddit ? (
+                    <div className="empty-state">
+                      <div>Select a subreddit to view its rules and playbooks</div>
+                    </div>
+                  ) : (() => {
+                    const activePb = playbooks.find(p => p.subreddit === selectedSubreddit);
+                    if (!activePb) return null;
+                    return (
+                      <div className="detail-scroll-area">
+                        <div className="detail-header-meta">
+                          <span className="detail-subreddit">r/{activePb.subreddit}</span>
+                          <span className="detail-score">Last updated: {new Date(activePb.updated_at).toLocaleString()}</span>
+                          <a href={`https://reddit.com/r/${activePb.subreddit}`} target="_blank" rel="noopener noreferrer" className="detail-link">
+                            Visit Subreddit <ArrowUpRight size={14} style={{ marginLeft: "4px" }}/>
+                          </a>
+                        </div>
+                        
+                        <h1 className="detail-title">Subreddit Rules & Notes</h1>
+
+                        <div className="ai-insight-box">
+                          <div className="insight-header">
+                            <CheckSquare size={14} /> COMMUNITY RULES
+                          </div>
+                          <div className="insight-content" style={{ whiteSpace: "pre-wrap", lineHeight: "1.6" }}>
+                            {activePb.rules_text || "No rules available."}
+                          </div>
+                        </div>
+
+                        <div className="ai-insight-box" style={{ background: "transparent", marginTop: "1rem" }}>
+                          <div className="insight-header">
+                            <MessageSquareDiff size={14} /> PLAYBOOK NOTES
+                          </div>
+                          <div className="insight-content">
+                            {activePb.notes ? activePb.notes : <span style={{ color: "var(--text-muted)" }}>No additional operator notes.</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
           </>
         )}
 

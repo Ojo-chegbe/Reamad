@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-from src.soloa_profile import DEFAULT_PAIN_KEYWORDS, DEFAULT_PAIN_SUBREDDITS
+from src.soloa_profile import get_profile
 
 
 def _csv(value: str) -> list[str]:
@@ -29,13 +29,15 @@ class Settings:
 
 def load_settings() -> Settings:
     load_dotenv(override=True)
+    profile = get_profile()
 
     return Settings(
         reddit_user_agent=os.getenv("REDDIT_USER_AGENT", "").strip(),
         target_subreddits=_csv(os.getenv("TARGET_SUBREDDITS", "")),
-        pain_subreddits=_csv(os.getenv("PAIN_SUBREDDITS", ",".join(DEFAULT_PAIN_SUBREDDITS))),
+        pain_subreddits=profile.get("subreddits", _csv(os.getenv("PAIN_SUBREDDITS", ""))),
         keywords=[k.lower() for k in _csv(os.getenv("KEYWORDS", ""))],
-        pain_keywords=[k.lower() for k in _csv(os.getenv("PAIN_KEYWORDS", ",".join(DEFAULT_PAIN_KEYWORDS)))],
+        pain_keywords=[k.lower() for k in profile.get("keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))],
+
         poll_seconds=int(os.getenv("POLL_SECONDS", "60")),
         max_items_per_subreddit=int(os.getenv("MAX_ITEMS_PER_SUBREDDIT", "50")),
         min_score=int(os.getenv("MIN_SCORE", "25")),

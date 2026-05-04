@@ -92,6 +92,21 @@ class RedditClient:
                 lines.append(desc)
         return lines
 
+    def search_subreddits(self, query: str, limit: int = 5) -> list[str]:
+        url = f"https://www.reddit.com/subreddits/search.json?q={query}&limit={limit}&raw_json=1"
+        try:
+            payload = self._get_json(url)
+            children = payload.get("data", {}).get("children", []) if isinstance(payload, dict) else []
+            subs = []
+            for child in children:
+                data = child.get("data", {}) if isinstance(child, dict) else {}
+                sub_name = str(data.get("display_name", "")).strip()
+                if sub_name:
+                    subs.append(sub_name)
+            return subs
+        except Exception:
+            return []
+
 
 def make_reddit(settings: Settings) -> RedditClient:
     if not settings.reddit_user_agent:

@@ -200,5 +200,105 @@ def runtime_stop():
     return jsonify(runtime.stop())
 
 
+@app.get("/api/profile")
+def get_bot_profile():
+    from src.soloa_profile import get_profile
+    return jsonify(get_profile())
+
+
+@app.post("/api/profile")
+def update_bot_profile():
+    from src.soloa_profile import save_profile
+    data = request.get_json() or {}
+    save_profile(data)
+    
+    # Restart the bot to apply new configuration
+    with runtime._lock:
+        if runtime._proc:
+            runtime._proc.terminate()
+            try:
+                runtime._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                runtime._proc.kill()
+                runtime._proc.wait(timeout=5)
+            runtime._proc = None
+            runtime._last_returncode = None
+            
+            # Start again
+            runtime._stdout_path.write_text("")
+            runtime._stderr_path.write_text("")
+            stdout_handle = runtime._stdout_path.open("a", encoding="utf-8")
+            stderr_handle = runtime._stderr_path.open("a", encoding="utf-8")
+            runtime._proc = subprocess.Popen(
+                [sys.executable, "-m", "src.main"],
+                cwd=str(_PROJECT_ROOT),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            
+    return jsonify({"success": True})
+
+
+@app.get("/api/search_subreddits")
+def api_search_subreddits():
+    from src.config import load_settings
+    from src.reddit_client import make_reddit
+    
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify({"results": []})
+        
+    try:
+        settings = load_settings()
+        reddit = make_reddit(settings)
+        results = reddit.search_subreddits(query)
+        return jsonify({"results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/suggest_keywords")
+def api_suggest_keywords():
+    from src.config import load_settings
+    from google import genai
+    from src.soloa_profile import get_profile
+
+    try:
+        settings = load_settings()
+        if not settings.google_api_key:
+            return jsonify({"error": "No Google API Key configured."}), 400
+
+        profile = get_profile()
+        knowledge = profile.get("knowledge_block", "")
+        current_keywords = profile.get("keywords", [])
+
+        client = genai.Client(api_key=settings.google_api_key)
+        prompt = f"""
+        Based on this product knowledge:
+        {knowledge}
+
+        And these current keywords:
+        {', '.join(current_keywords)}
+
+        Suggest 5-8 new short, natural "pain keywords" or "frustration phrases" that Reddit users might use when struggling with problems this product solves.
+        Output ONLY the phrases, one per line, no bullet points, no quotes.
+        """
+
+        response = client.models.generate_content(
+            model=settings.google_model,
+            contents=prompt.strip(),
+        )
+        
+        text = response.text or ""
+        suggestions = [line.strip().strip('-* ') for line in text.splitlines() if line.strip()]
+        # filter out any that are already in current_keywords
+        suggestions = [s for s in suggestions if s and s.lower() not in [k.lower() for k in current_keywords]]
+        
+        return jsonify({"suggestions": suggestions})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5050)

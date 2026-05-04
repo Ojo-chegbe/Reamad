@@ -6,7 +6,7 @@ from google import genai
 
 from src.config import Settings
 from src.models import Opportunity
-from src.soloa_profile import SOLOA_KNOWLEDGE_BLOCK
+from src.soloa_profile import get_knowledge_block
 
 
 def _fallback_drafts(opportunity: Opportunity) -> List[str]:
@@ -36,7 +36,7 @@ Community rules context:
 {subreddit_rules or "No rules loaded."}
 
 Soloa context to use when relevant:
-{SOLOA_KNOWLEDGE_BLOCK}
+{get_knowledge_block()}
 
 Post title: {opportunity.title}
 Post body: {opportunity.body[:2000]}
