@@ -12,5 +12,6 @@ class Opportunity:
     author: str
     permalink: str
     score: int
+    created_utc: float
+    age_minutes: int
     reasons: list[str]
-

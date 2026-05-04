@@ -6,3 +6,5 @@ __pycache__/
 bot_state.db
 ui_state.db
 .env
+run.err.log
+run.out.log

@@ -1,55 +1,74 @@
 from __future__ import annotations
 
+import time
 from typing import Iterable
 
-import praw
-
 from src.models import Opportunity
+from src.reddit_client import RedditClient, RedditPost
 from src.scorer import score_post
 from src.store import Store
 
 
 def _build_opportunity(
-    submission,
+    submission: RedditPost,
     rules_text: str,
     keywords: list[str],
+    pain_keywords: list[str],
+    early_reply_window_minutes: int,
 ) -> Opportunity:
-    body = submission.selftext or ""
+    body = submission.body or ""
     score, reasons = score_post(
-        title=submission.title or "",
+        title=submission.title,
         body=body,
         subreddit_rules_text=rules_text,
         keywords=keywords,
+        pain_keywords=pain_keywords,
+        created_utc=submission.created_utc,
+        early_reply_window_minutes=early_reply_window_minutes,
     )
+    age_minutes = max(0, int((time.time() - submission.created_utc) / 60)) if submission.created_utc > 0 else 0
     return Opportunity(
-        thing_id=submission.fullname,
-        subreddit=str(submission.subreddit),
-        title=submission.title or "",
+        thing_id=submission.thing_id,
+        subreddit=submission.subreddit,
+        title=submission.title,
         body=body,
-        author=str(submission.author) if submission.author else "[deleted]",
-        permalink=f"https://reddit.com{submission.permalink}",
+        author=submission.author or "[deleted]",
+        permalink=submission.permalink,
         score=score,
+        created_utc=submission.created_utc,
+        age_minutes=age_minutes,
         reasons=reasons,
     )
 
 
 def collect_opportunities(
-    reddit: praw.Reddit,
+    reddit: RedditClient,
     store: Store,
     subreddits: list[str],
     keywords: list[str],
+    pain_keywords: list[str],
+    early_reply_window_minutes: int,
     max_items_per_subreddit: int,
     min_score: int,
 ) -> Iterable[Opportunity]:
     for sub_name in subreddits:
-        subreddit = reddit.subreddit(sub_name)
         rules_text = store.get_rules(sub_name)
-        for submission in subreddit.new(limit=max_items_per_subreddit):
-            if store.is_seen(submission.fullname):
+        try:
+            submissions = reddit.get_new_posts(sub_name, limit=max_items_per_subreddit)
+        except Exception as exc:
+            print(f"Collect failed for r/{sub_name}: {exc}")
+            continue
+
+        for submission in submissions:
+            if store.is_seen(submission.thing_id):
                 continue
-
-            opp = _build_opportunity(submission, rules_text, keywords)
-            store.mark_seen(submission.fullname)
+            opp = _build_opportunity(
+                submission=submission,
+                rules_text=rules_text,
+                keywords=keywords,
+                pain_keywords=pain_keywords,
+                early_reply_window_minutes=early_reply_window_minutes,
+            )
             if opp.score >= min_score:
+                store.mark_seen(submission.thing_id)
                 yield opp
-
