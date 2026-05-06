@@ -24,6 +24,7 @@ import {
 
 interface Opportunity {
   id: string;
+  platform?: string;
   subreddit: string;
   title: string;
   body: string;
@@ -50,6 +51,7 @@ interface Playbook {
 
 interface AuditLog {
   id: number;
+  platform?: string;
   opportunity_id: string;
   action: string;
   actor: string;
@@ -59,15 +61,23 @@ interface AuditLog {
 
 interface BotProfile {
   subreddits: string[];
-  keywords: string[];
-  knowledge_block: string;
+  reddit_keywords: string[];
+  twitter_keywords: string[];
+  reddit_knowledge_block: string;
+  twitter_knowledge_block: string;
+  reddit_prompt_template: string;
+  twitter_prompt_template: string;
+  twitter_target_handles: string[];
+  twitter_queries: string[];
 }
 
 type AuditActionFilter = "all" | "approved" | "rejected";
 type ConfigTab = "profile" | "playbooks";
+type Platform = "reddit" | "twitter";
 
 export default function Gatekeeper() {
   const [currentView, setCurrentView] = useState("triage");
+  const [platform, setPlatform] = useState<Platform>("reddit");
   
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [selectedOppId, setSelectedOppId] = useState<string | null>(null);
@@ -85,6 +95,7 @@ export default function Gatekeeper() {
   const [profile, setProfile] = useState<BotProfile | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMessage, setProfileMessage] = useState("");
+  const [configEditing, setConfigEditing] = useState(false);
 
   const [note, setNote] = useState<string>("");
   const [botRunning, setBotRunning] = useState<boolean>(false);
@@ -92,6 +103,8 @@ export default function Gatekeeper() {
   const [runtimeLoading, setRuntimeLoading] = useState<boolean>(false);
 
   const [subredditInput, setSubredditInput] = useState("");
+  const [twitterHandleInput, setTwitterHandleInput] = useState("");
+  const [twitterQueryInput, setTwitterQueryInput] = useState("");
   const [subredditSuggestions, setSubredditSuggestions] = useState<string[]>([]);
   const [suggestingKeywords, setSuggestingKeywords] = useState(false);
   const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([]);
@@ -99,8 +112,12 @@ export default function Gatekeeper() {
   const fetchOpportunities = async () => {
     setLoading(true);
     try {
-      const statusParam = filter !== "all" ? `?status=${filter}` : "";
-      const res = await fetch(`/api/opportunities${statusParam}`);
+      const params = new URLSearchParams();
+      params.set("platform", platform);
+      if (filter !== "all") {
+        params.set("status", filter);
+      }
+      const res = await fetch(`/api/opportunities?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setOpportunities(data.opportunities);
@@ -125,7 +142,7 @@ export default function Gatekeeper() {
 
   const fetchPlaybooks = async () => {
     try {
-      const res = await fetch(`/api/playbooks`);
+      const res = await fetch(`/api/playbooks?platform=${platform}`);
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setPlaybooks(data.playbooks);
@@ -139,7 +156,7 @@ export default function Gatekeeper() {
 
   const fetchAuditLogs = async () => {
     try {
-      const res = await fetch(`/api/audit`);
+      const res = await fetch(`/api/audit?platform=${platform}`);
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setAuditLogs(data.logs);
@@ -165,6 +182,7 @@ export default function Gatekeeper() {
       if (!res.ok) throw new Error("Failed to fetch profile");
       const data = await res.json();
       setProfile(data);
+      setConfigEditing(false);
     } catch (err) {
       console.error(err);
     }
@@ -182,6 +200,7 @@ export default function Gatekeeper() {
       });
       if (res.ok) {
         setProfileMessage("Profile saved successfully. Engine restarting...");
+        setConfigEditing(false);
         setTimeout(() => setProfileMessage(""), 5000);
       } else {
         setProfileMessage("Error saving profile.");
@@ -207,7 +226,7 @@ export default function Gatekeeper() {
       }
     }, 0);
     return () => clearTimeout(timer);
-  }, [filter, currentView]);
+  }, [filter, currentView, platform]);
 
   useEffect(() => {
     if (currentView !== "triage") {
@@ -222,9 +241,13 @@ export default function Gatekeeper() {
         clearInterval(dataTimer);
       }
     };
-  }, [currentView, filter, botRunning]);
+  }, [currentView, filter, botRunning, platform]);
 
   useEffect(() => {
+    if (platform !== "reddit") {
+      setSubredditSuggestions([]);
+      return;
+    }
     if (!subredditInput || subredditInput.length < 2) {
       setSubredditSuggestions([]);
       return;
@@ -237,18 +260,29 @@ export default function Gatekeeper() {
       } catch(e) {}
     }, 400);
     return () => clearTimeout(timer);
-  }, [subredditInput]);
+  }, [subredditInput, platform]);
 
   const generateKeywords = async () => {
+    if (!configEditing) return;
     setSuggestingKeywords(true);
     try {
-      const res = await fetch("/api/suggest_keywords", { method: "POST" });
+      const res = await fetch(`/api/suggest_keywords?platform=${platform}`, { method: "POST" });
       const data = await res.json();
       if (data.suggestions) {
         setKeywordSuggestions(data.suggestions);
       }
     } catch(e) {}
     setSuggestingKeywords(false);
+  };
+
+  const beginEditConfig = () => {
+    setProfileMessage("");
+    setConfigEditing(true);
+  };
+
+  const cancelEditConfig = async () => {
+    setProfileMessage("Changes discarded.");
+    await fetchProfile();
   };
 
   const toggleRuntime = async () => {
@@ -290,7 +324,7 @@ export default function Gatekeeper() {
 
   const handleDiscardAll = async () => {
     try {
-      const res = await fetch("/api/opportunities/reject_all", { method: "POST" });
+      const res = await fetch(`/api/opportunities/reject_all?platform=${platform}`, { method: "POST" });
       if (res.ok) {
         setTriageMenuOpen(false);
         fetchOpportunities();
@@ -312,7 +346,7 @@ export default function Gatekeeper() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="sidebar-title">SOLOA AI</div>
-          <div className="sidebar-subtitle">REDDIT ENGINE</div>
+          <div className="sidebar-subtitle">{platform === "reddit" ? "REDDIT ENGINE" : "TWITTER ENGINE"}</div>
         </div>
 
         <nav className="sidebar-nav">
@@ -359,6 +393,20 @@ export default function Gatekeeper() {
             The Gatekeeper <span className="page-version">v2.5.0-master</span>
           </div>
           <div className="topbar-actions">
+            <div className="filters">
+              <button
+                className={`filter-btn ${platform === "reddit" ? "active" : ""}`}
+                onClick={() => setPlatform("reddit")}
+              >
+                REDDIT
+              </button>
+              <button
+                className={`filter-btn ${platform === "twitter" ? "active" : ""}`}
+                onClick={() => setPlatform("twitter")}
+              >
+                TWITTER
+              </button>
+            </div>
             <div className="bot-controls">
               <div className="bot-state">
                 <div className={`status-dot ${botRunning ? "running" : "stopped"}`}></div>
@@ -446,14 +494,14 @@ export default function Gatekeeper() {
                       onClick={() => setSelectedOppId(opp.id)}
                     >
                       <div className="list-item-header">
-                        <span className="list-item-meta">r/{opp.subreddit}</span>
+                        <span className="list-item-meta">{platform === "reddit" ? `r/${opp.subreddit}` : `@${opp.subreddit}`}</span>
                         <a
                           href={opp.url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="list-open-link"
                           onClick={(e) => e.stopPropagation()}
-                          title="Open post in Reddit"
+                          title={platform === "reddit" ? "Open post in Reddit" : "Open post in Twitter"}
                         >
                           <ExternalLink size={12} />
                         </a>
@@ -478,10 +526,10 @@ export default function Gatekeeper() {
                   <>
                     <div className="detail-scroll-area">
                       <div className="detail-header-meta">
-                        <span className="detail-subreddit">r/{activeOpp.subreddit}</span>
+                        <span className="detail-subreddit">{platform === "reddit" ? `r/${activeOpp.subreddit}` : `@${activeOpp.subreddit}`}</span>
                         <span className="detail-score">Score: {activeOpp.score}</span>
                         <a href={activeOpp.url} target="_blank" rel="noopener noreferrer" className="detail-link">
-                          Open in Reddit <ArrowUpRight size={14} style={{ marginLeft: "4px" }}/>
+                          Open in {platform === "reddit" ? "Reddit" : "Twitter"} <ArrowUpRight size={14} style={{ marginLeft: "4px" }}/>
                         </a>
                       </div>
                       
@@ -619,10 +667,55 @@ export default function Gatekeeper() {
                   PLAYBOOKS
                 </button>
               </div>
+              {configTab === "profile" && profile && (
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  {configEditing && (
+                    <span
+                      style={{
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        color: "#0F172A",
+                        background: "#FBBF24",
+                        border: "1px solid #F59E0B",
+                        borderRadius: "6px",
+                        padding: "0.35rem 0.55rem",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Edit Mode Active
+                    </span>
+                  )}
+                  {!configEditing ? (
+                    <button
+                      className="btn btn-open"
+                      onClick={beginEditConfig}
+                    >
+                      EDIT CONFIGURATION
+                    </button>
+                  ) : (
+                    <button
+                      className="btn"
+                      onClick={cancelEditConfig}
+                      disabled={savingProfile}
+                    >
+                      CANCEL
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {configTab === "profile" && profile && (
-              <div className="scroll-container" style={{ paddingBottom: "100px" }}>
+              <div
+                className="scroll-container"
+                style={{
+                  paddingBottom: "100px",
+                  border: configEditing ? "1px solid rgba(251,191,36,0.55)" : "1px solid transparent",
+                  borderRadius: "10px",
+                  background: configEditing ? "linear-gradient(180deg, rgba(251,191,36,0.08), rgba(251,191,36,0.02))" : undefined,
+                }}
+              >
                 <h2 style={{ fontSize: "1.2rem", color: "var(--text-primary)", marginBottom: "2rem" }}>Bot Identity & Engine Rules</h2>
                 
                 <div className="profile-grid">
@@ -630,71 +723,151 @@ export default function Gatekeeper() {
                     <div className="profile-card">
                       <div>
                         <div className="profile-card-title">
-                          Target Subreddits
+                          {platform === "reddit" ? "Target Subreddits" : "Target Twitter Handles"}
                         </div>
                         <div className="profile-card-desc">
-                          The communities the bot will actively monitor for pain points.
+                          {platform === "reddit"
+                            ? "The communities the bot will actively monitor for pain points."
+                            : "Accounts the bot will watch for relevant posts and replies."}
                         </div>
                       </div>
                       
                       <div className="tag-input-container">
                         <div className="tags-wrapper">
-                          {profile.subreddits.map((tag, i) => (
+                          {(platform === "reddit" ? profile.subreddits : profile.twitter_target_handles).map((tag, i) => (
                             <span key={i} className="tag-pill">
-                              {tag}
+                              {platform === "reddit" ? tag : `@${String(tag).replace(/^@+/, "")}`}
                               <button 
                                 type="button" 
-                                onClick={() => setProfile({...profile, subreddits: profile.subreddits.filter((_, idx) => idx !== i)})} 
+                                onClick={() => {
+                                  if (platform === "reddit") {
+                                    setProfile({...profile, subreddits: profile.subreddits.filter((_, idx) => idx !== i)});
+                                  } else {
+                                    setProfile({...profile, twitter_target_handles: profile.twitter_target_handles.filter((_, idx) => idx !== i)});
+                                  }
+                                }} 
                                 className="tag-remove-btn"
+                                disabled={!configEditing}
                               >
                                 <X size={12} />
                               </button>
                             </span>
                           ))}
-                          <div style={{ position: "relative", flex: 1, minWidth: "140px" }}>
+                          {platform === "reddit" ? (
+                            <div style={{ position: "relative", flex: 1, minWidth: "140px" }}>
+                              <input
+                                type="text"
+                                className="tag-input-field"
+                                placeholder="Search subreddit..."
+                                value={subredditInput}
+                                onChange={(e) => setSubredditInput(e.target.value)}
+                                disabled={!configEditing}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && subredditInput.trim()) {
+                                    e.preventDefault();
+                                    const val = subredditInput.trim();
+                                    if (!profile.subreddits.includes(val)) {
+                                      setProfile({...profile, subreddits: [...profile.subreddits, val]});
+                                    }
+                                    setSubredditInput("");
+                                  }
+                                }}
+                                style={{ width: "100%" }}
+                              />
+                              {configEditing && subredditSuggestions.length > 0 && (
+                                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: "4px", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden", zIndex: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.5)" }}>
+                                  {subredditSuggestions.map(sub => (
+                                    <div 
+                                      key={sub}
+                                      style={{ padding: "8px 12px", fontSize: "0.85rem", cursor: "pointer", color: "var(--text-primary)" }}
+                                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "var(--bg-card-hover)"}
+                                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+                                      onClick={() => {
+                                        if (!configEditing) return;
+                                        if (!profile.subreddits.includes(sub)) {
+                                          setProfile({...profile, subreddits: [...profile.subreddits, sub]});
+                                        }
+                                        setSubredditInput("");
+                                        setSubredditSuggestions([]);
+                                      }}
+                                    >
+                                      r/{sub}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
                             <input
                               type="text"
                               className="tag-input-field"
-                              placeholder="Search subreddit..."
-                              value={subredditInput}
-                              onChange={(e) => setSubredditInput(e.target.value)}
+                              placeholder="Add handle & press Enter..."
+                              value={twitterHandleInput}
+                              onChange={(e) => setTwitterHandleInput(e.target.value)}
+                              disabled={!configEditing}
                               onKeyDown={(e) => {
-                                if (e.key === "Enter" && subredditInput.trim()) {
+                                if (e.key === "Enter" && twitterHandleInput.trim()) {
                                   e.preventDefault();
-                                  const val = subredditInput.trim();
-                                  if (!profile.subreddits.includes(val)) {
-                                    setProfile({...profile, subreddits: [...profile.subreddits, val]});
+                                  const normalized = twitterHandleInput.trim().replace(/^@+/, "").toLowerCase();
+                                  if (normalized && !profile.twitter_target_handles.includes(normalized)) {
+                                    setProfile({...profile, twitter_target_handles: [...profile.twitter_target_handles, normalized]});
                                   }
-                                  setSubredditInput("");
+                                  setTwitterHandleInput("");
                                 }
                               }}
-                              style={{ width: "100%" }}
                             />
-                            {subredditSuggestions.length > 0 && (
-                              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: "4px", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "6px", overflow: "hidden", zIndex: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.5)" }}>
-                                {subredditSuggestions.map(sub => (
-                                  <div 
-                                    key={sub}
-                                    style={{ padding: "8px 12px", fontSize: "0.85rem", cursor: "pointer", color: "var(--text-primary)" }}
-                                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "var(--bg-card-hover)"}
-                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
-                                    onClick={() => {
-                                      if (!profile.subreddits.includes(sub)) {
-                                        setProfile({...profile, subreddits: [...profile.subreddits, sub]});
-                                      }
-                                      setSubredditInput("");
-                                      setSubredditSuggestions([]);
-                                    }}
-                                  >
-                                    r/{sub}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
+                          )}
                         </div>
                       </div>
                     </div>
+
+                    {platform === "twitter" && (
+                      <div className="profile-card">
+                        <div>
+                          <div className="profile-card-title">
+                            Twitter Query Terms
+                          </div>
+                          <div className="profile-card-desc">
+                            Additional terms to monitor on Twitter beyond target handles.
+                          </div>
+                        </div>
+                        <div className="tag-input-container">
+                          <div className="tags-wrapper">
+                            {profile.twitter_queries.map((tag, i) => (
+                              <span key={i} className="tag-pill">
+                                {tag}
+                                <button
+                                  type="button"
+                                  onClick={() => setProfile({...profile, twitter_queries: profile.twitter_queries.filter((_, idx) => idx !== i)})}
+                                  className="tag-remove-btn"
+                                  disabled={!configEditing}
+                                >
+                                  <X size={12} />
+                                </button>
+                              </span>
+                            ))}
+                            <input
+                              type="text"
+                              className="tag-input-field"
+                              placeholder="Add query & press Enter..."
+                              value={twitterQueryInput}
+                              onChange={(e) => setTwitterQueryInput(e.target.value)}
+                              disabled={!configEditing}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && twitterQueryInput.trim()) {
+                                  e.preventDefault();
+                                  const normalized = twitterQueryInput.trim().toLowerCase();
+                                  if (normalized && !profile.twitter_queries.includes(normalized)) {
+                                    setProfile({...profile, twitter_queries: [...profile.twitter_queries, normalized]});
+                                  }
+                                  setTwitterQueryInput("");
+                                }
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="profile-card">
                       <div>
@@ -708,13 +881,20 @@ export default function Gatekeeper() {
                       
                       <div className="tag-input-container">
                         <div className="tags-wrapper">
-                          {profile.keywords.map((tag, i) => (
+                          {(platform === "reddit" ? profile.reddit_keywords : profile.twitter_keywords).map((tag, i) => (
                             <span key={i} className="tag-pill">
                               {tag}
                               <button 
                                 type="button" 
-                                onClick={() => setProfile({...profile, keywords: profile.keywords.filter((_, idx) => idx !== i)})} 
+                                onClick={() => {
+                                  if (platform === "reddit") {
+                                    setProfile({...profile, reddit_keywords: profile.reddit_keywords.filter((_, idx) => idx !== i)});
+                                  } else {
+                                    setProfile({...profile, twitter_keywords: profile.twitter_keywords.filter((_, idx) => idx !== i)});
+                                  }
+                                }} 
                                 className="tag-remove-btn"
+                                disabled={!configEditing}
                               >
                                 <X size={12} />
                               </button>
@@ -724,12 +904,19 @@ export default function Gatekeeper() {
                             type="text"
                             className="tag-input-field"
                             placeholder="Add keyword & press Enter..."
+                            disabled={!configEditing}
                             onKeyDown={(e) => {
-                              if (e.key === "Enter" && e.currentTarget.value.trim()) {
-                                e.preventDefault();
-                                const val = e.currentTarget.value.trim();
-                                if (!profile.keywords.includes(val)) {
-                                  setProfile({...profile, keywords: [...profile.keywords, val]});
+                                if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                                  e.preventDefault();
+                                  const val = e.currentTarget.value.trim();
+                                if (platform === "reddit") {
+                                  if (!profile.reddit_keywords.includes(val)) {
+                                    setProfile({...profile, reddit_keywords: [...profile.reddit_keywords, val]});
+                                  }
+                                } else {
+                                  if (!profile.twitter_keywords.includes(val)) {
+                                    setProfile({...profile, twitter_keywords: [...profile.twitter_keywords, val]});
+                                  }
                                 }
                                 e.currentTarget.value = "";
                               }
@@ -738,7 +925,7 @@ export default function Gatekeeper() {
                         </div>
                       </div>
                       
-                      {keywordSuggestions.length > 0 && (
+                      {configEditing && keywordSuggestions.length > 0 && (
                         <div style={{ marginTop: "0.5rem" }}>
                           <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.5rem", fontWeight: "600", textTransform: "uppercase" }}>AI SUGGESTIONS:</div>
                           <div className="tags-wrapper">
@@ -748,8 +935,15 @@ export default function Gatekeeper() {
                                 className="tag-pill" 
                                 style={{ cursor: "pointer", borderStyle: "dashed" }}
                                 onClick={() => {
-                                  if (!profile.keywords.includes(sug)) {
-                                    setProfile({...profile, keywords: [...profile.keywords, sug]});
+                                  if (!configEditing) return;
+                                  if (platform === "reddit") {
+                                    if (!profile.reddit_keywords.includes(sug)) {
+                                      setProfile({...profile, reddit_keywords: [...profile.reddit_keywords, sug]});
+                                    }
+                                  } else {
+                                    if (!profile.twitter_keywords.includes(sug)) {
+                                      setProfile({...profile, twitter_keywords: [...profile.twitter_keywords, sug]});
+                                    }
                                   }
                                   setKeywordSuggestions(keywordSuggestions.filter(k => k !== sug));
                                 }}
@@ -766,7 +960,7 @@ export default function Gatekeeper() {
                         className="btn btn-open" 
                         style={{ alignSelf: "flex-start", padding: "0.5rem 1rem", fontSize: "0.75rem", marginTop: "auto" }}
                         onClick={generateKeywords}
-                        disabled={suggestingKeywords}
+                        disabled={!configEditing || suggestingKeywords}
                       >
                         {suggestingKeywords ? "ANALYZING KNOWLEDGE..." : "AI SUGGEST KEYWORDS"}
                       </button>
@@ -777,10 +971,10 @@ export default function Gatekeeper() {
                     <div className="profile-card" style={{ flex: 1 }}>
                       <div>
                         <div className="profile-card-title">
-                          Knowledge Block (System Prompt)
+                          {platform === "reddit" ? "Reddit Knowledge Block" : "Twitter Knowledge Block"}
                         </div>
                         <div className="profile-card-desc">
-                          The core product context fed to the LLM. Define your product's features, tone of voice, and Reddit positioning strategy here.
+                          Platform-specific context fed into generation for the selected platform.
                         </div>
                       </div>
 
@@ -791,8 +985,44 @@ export default function Gatekeeper() {
                         </div>
                         <textarea 
                           className="code-editor-textarea"
-                          value={profile.knowledge_block}
-                          onChange={(e) => setProfile({ ...profile, knowledge_block: e.target.value })}
+                          value={platform === "reddit" ? profile.reddit_knowledge_block : profile.twitter_knowledge_block}
+                          onChange={(e) => {
+                            if (platform === "reddit") {
+                              setProfile({ ...profile, reddit_knowledge_block: e.target.value });
+                            } else {
+                              setProfile({ ...profile, twitter_knowledge_block: e.target.value });
+                            }
+                          }}
+                          disabled={!configEditing}
+                          spellCheck="false"
+                        />
+                      </div>
+                    </div>
+                    <div className="profile-card" style={{ marginTop: "1rem" }}>
+                      <div>
+                        <div className="profile-card-title">
+                          {platform === "reddit" ? "Reddit Prompt Template" : "Twitter Prompt Template"}
+                        </div>
+                        <div className="profile-card-desc">
+                          Edit instruction style only. Community rules, knowledge block, post title/body, and post age are auto-injected by backend and are not editable here.
+                        </div>
+                      </div>
+                      <div className="code-editor-wrapper">
+                        <div className="code-editor-header">
+                          <span>{platform === "reddit" ? "reddit_prompt.txt" : "twitter_prompt.txt"}</span>
+                          <span style={{ color: "var(--text-muted)" }}>TEMPLATE</span>
+                        </div>
+                        <textarea
+                          className="code-editor-textarea"
+                          value={platform === "reddit" ? profile.reddit_prompt_template : profile.twitter_prompt_template}
+                          onChange={(e) => {
+                            if (platform === "reddit") {
+                              setProfile({ ...profile, reddit_prompt_template: e.target.value });
+                            } else {
+                              setProfile({ ...profile, twitter_prompt_template: e.target.value });
+                            }
+                          }}
+                          disabled={!configEditing}
                           spellCheck="false"
                         />
                       </div>
@@ -803,13 +1033,13 @@ export default function Gatekeeper() {
                 <div className={`profile-action-bar visible`}>
                   <div className="profile-unsaved-text">
                     <span style={{ color: profileMessage ? (profileMessage.includes("Error") ? "var(--color-danger)" : "var(--color-success)") : "var(--text-muted)" }}>
-                      {profileMessage || "Remember to save your changes to update the engine."}
+                      {profileMessage || (configEditing ? "Edit mode is ON. You can now change fields. Click SAVE CONFIGURATION to apply changes." : "Configuration is locked. Click Edit Configuration to make changes.")}
                     </span>
                   </div>
                   <button 
                     className="btn btn-approve" 
                     onClick={saveProfile}
-                    disabled={savingProfile}
+                    disabled={!configEditing || savingProfile}
                   >
                     {savingProfile ? "SAVING & RESTARTING..." : "SAVE CONFIGURATION"}
                   </button>
@@ -817,7 +1047,13 @@ export default function Gatekeeper() {
               </div>
             )}
 
-            {configTab === "playbooks" && (
+            {configTab === "playbooks" && platform === "twitter" && (
+              <div className="empty-state">
+                <div>Twitter playbooks are not configured yet.</div>
+              </div>
+            )}
+
+            {configTab === "playbooks" && platform === "reddit" && (
               <div className="triage-layout" style={{ height: "calc(100vh - 120px)" }}>
                 {/* Inbox List (Left Pane) */}
                 <div className="inbox-list">

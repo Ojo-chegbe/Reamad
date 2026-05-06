@@ -51,11 +51,19 @@ def collect_opportunities(
     max_items_per_subreddit: int,
     min_score: int,
 ) -> Iterable[Opportunity]:
+    reddit_blocked = False
     for sub_name in subreddits:
+        if reddit_blocked:
+            break
         rules_text = store.get_rules(sub_name)
         try:
             submissions = reddit.get_new_posts(sub_name, limit=max_items_per_subreddit)
         except Exception as exc:
+            error_text = str(exc)
+            if "403" in error_text and "Blocked" in error_text:
+                print("Collect blocked by Reddit (HTTP 403). Pausing subreddit checks for this cycle.")
+                reddit_blocked = True
+                continue
             print(f"Collect failed for r/{sub_name}: {exc}")
             continue
 

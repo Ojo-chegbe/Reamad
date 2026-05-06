@@ -31,6 +31,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS opportunities (
                 id TEXT PRIMARY KEY,
+                platform TEXT NOT NULL DEFAULT 'reddit',
                 subreddit TEXT NOT NULL,
                 title TEXT NOT NULL,
                 body TEXT NOT NULL,
@@ -46,6 +47,9 @@ def init_db() -> None:
         )
         columns = conn.execute("PRAGMA table_info(opportunities)").fetchall()
         column_names = {col[1] for col in columns}
+        if "platform" not in column_names:
+            conn.execute("ALTER TABLE opportunities ADD COLUMN platform TEXT")
+        conn.execute("UPDATE opportunities SET platform = 'reddit' WHERE platform IS NULL OR platform = ''")
         if "status_updated_at" not in column_names:
             conn.execute(
                 "ALTER TABLE opportunities ADD COLUMN status_updated_at DATETIME"
@@ -67,6 +71,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT NOT NULL DEFAULT 'reddit',
                 opportunity_id TEXT NOT NULL,
                 action TEXT NOT NULL,
                 actor TEXT NOT NULL,
@@ -75,6 +80,11 @@ def init_db() -> None:
             )
             """
         )
+        audit_columns = conn.execute("PRAGMA table_info(audit_log)").fetchall()
+        audit_column_names = {col[1] for col in audit_columns}
+        if "platform" not in audit_column_names:
+            conn.execute("ALTER TABLE audit_log ADD COLUMN platform TEXT")
+        conn.execute("UPDATE audit_log SET platform = 'reddit' WHERE platform IS NULL OR platform = ''")
 
 
 def seed_if_empty() -> None:
@@ -130,11 +140,12 @@ def seed_if_empty() -> None:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO opportunities
-                (id, subreddit, title, body, url, score, status, reasons_json, drafts_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, platform, subreddit, title, body, url, score, status, reasons_json, drafts_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item["id"],
+                    "reddit",
                     item["subreddit"],
                     item["title"],
                     item["body"],
@@ -160,16 +171,23 @@ def seed_if_empty() -> None:
             )
 
 
-def list_opportunities(status: str | None = None) -> list[dict[str, Any]]:
+def list_opportunities(status: str | None = None, platform: str | None = None) -> list[dict[str, Any]]:
     purge_expired_rejected_opportunities()
     query = """
-        SELECT id, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at
+        SELECT id, platform, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at
         FROM opportunities
     """
-    params: tuple[Any, ...] = ()
+    where_parts: list[str] = []
+    params_list: list[Any] = []
     if status:
-        query += " WHERE status = ?"
-        params = (status,)
+        where_parts.append("status = ?")
+        params_list.append(status)
+    if platform:
+        where_parts.append("platform = ?")
+        params_list.append(platform)
+    if where_parts:
+        query += " WHERE " + " AND ".join(where_parts)
+    params: tuple[Any, ...] = tuple(params_list)
     query += " ORDER BY score DESC, created_at DESC"
 
     with _conn() as conn:
@@ -180,15 +198,16 @@ def list_opportunities(status: str | None = None) -> list[dict[str, Any]]:
         output.append(
             {
                 "id": row[0],
-                "subreddit": row[1],
-                "title": row[2],
-                "body": row[3],
-                "url": row[4],
-                "score": row[5],
-                "status": row[6],
-                "reasons": json.loads(row[7]),
-                "drafts": json.loads(row[8]),
-                "created_at": row[9],
+                "platform": row[1],
+                "subreddit": row[2],
+                "title": row[3],
+                "body": row[4],
+                "url": row[5],
+                "score": row[6],
+                "status": row[7],
+                "reasons": json.loads(row[8]),
+                "drafts": json.loads(row[9]),
+                "created_at": row[10],
             }
         )
     return output
@@ -213,7 +232,7 @@ def get_opportunity(opportunity_id: str) -> dict[str, Any] | None:
     with _conn() as conn:
         row = conn.execute(
             """
-            SELECT id, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at
+            SELECT id, platform, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at
             FROM opportunities
             WHERE id = ?
             """,
@@ -223,15 +242,16 @@ def get_opportunity(opportunity_id: str) -> dict[str, Any] | None:
         return None
     return {
         "id": row[0],
-        "subreddit": row[1],
-        "title": row[2],
-        "body": row[3],
-        "url": row[4],
-        "score": row[5],
-        "status": row[6],
-        "reasons": json.loads(row[7]),
-        "drafts": json.loads(row[8]),
-        "created_at": row[9],
+        "platform": row[1],
+        "subreddit": row[2],
+        "title": row[3],
+        "body": row[4],
+        "url": row[5],
+        "score": row[6],
+        "status": row[7],
+        "reasons": json.loads(row[8]),
+        "drafts": json.loads(row[9]),
+        "created_at": row[10],
     }
 
 
@@ -248,6 +268,7 @@ def list_playbooks() -> list[dict[str, Any]]:
 
 def upsert_opportunity(
     opportunity_id: str,
+    platform: str,
     subreddit: str,
     title: str,
     body: str,
@@ -260,9 +281,10 @@ def upsert_opportunity(
         conn.execute(
             """
             INSERT INTO opportunities
-            (id, subreddit, title, body, url, score, status, status_updated_at, reasons_json, drafts_json)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, ?, ?)
+            (id, platform, subreddit, title, body, url, score, status, status_updated_at, reasons_json, drafts_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
+                platform = excluded.platform,
                 subreddit = excluded.subreddit,
                 title = excluded.title,
                 body = excluded.body,
@@ -274,6 +296,7 @@ def upsert_opportunity(
             """,
             (
                 opportunity_id,
+                platform,
                 subreddit,
                 title,
                 body,
@@ -314,51 +337,80 @@ def upsert_playbook(subreddit: str, rules_text: str) -> None:
 
 def update_status(opportunity_id: str, status: str, actor: str, note: str = "") -> None:
     with _conn() as conn:
+        platform_row = conn.execute(
+            "SELECT platform FROM opportunities WHERE id = ?",
+            (opportunity_id,),
+        ).fetchone()
+        platform = platform_row[0] if platform_row and platform_row[0] else "reddit"
         conn.execute(
             "UPDATE opportunities SET status = ?, status_updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (status, opportunity_id),
         )
         conn.execute(
-            "INSERT INTO audit_log (opportunity_id, action, actor, note) VALUES (?, ?, ?, ?)",
-            (opportunity_id, status, actor, note),
+            "INSERT INTO audit_log (platform, opportunity_id, action, actor, note) VALUES (?, ?, ?, ?, ?)",
+            (platform, opportunity_id, status, actor, note),
         )
 
 
-def reject_all_pending(actor: str) -> int:
+def reject_all_pending(actor: str, platform: str | None = None) -> int:
     with _conn() as conn:
-        rows = conn.execute("SELECT id FROM opportunities WHERE status = 'pending'").fetchall()
+        params: tuple[Any, ...] = ()
+        query = "SELECT id FROM opportunities WHERE status = 'pending'"
+        if platform:
+            query += " AND platform = ?"
+            params = (platform,)
+        rows = conn.execute(query, params).fetchall()
         if not rows:
             return 0
         ids = [r[0] for r in rows]
-        conn.execute(
-            "UPDATE opportunities SET status = 'rejected', status_updated_at = CURRENT_TIMESTAMP WHERE status = 'pending'"
-        )
-        audit_data = [(opp_id, 'rejected', actor, 'Bulk discarded') for opp_id in ids]
+        if platform:
+            conn.execute(
+                "UPDATE opportunities SET status = 'rejected', status_updated_at = CURRENT_TIMESTAMP WHERE status = 'pending' AND platform = ?",
+                (platform,),
+            )
+        else:
+            conn.execute(
+                "UPDATE opportunities SET status = 'rejected', status_updated_at = CURRENT_TIMESTAMP WHERE status = 'pending'"
+            )
+        audit_data = [(platform or "reddit", opp_id, 'rejected', actor, 'Bulk discarded') for opp_id in ids]
         conn.executemany(
-            "INSERT INTO audit_log (opportunity_id, action, actor, note) VALUES (?, ?, ?, ?)",
+            "INSERT INTO audit_log (platform, opportunity_id, action, actor, note) VALUES (?, ?, ?, ?, ?)",
             audit_data
         )
         return len(ids)
 
 
-def list_audit() -> list[dict[str, Any]]:
+def list_audit(platform: str | None = None) -> list[dict[str, Any]]:
     with _conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, opportunity_id, action, actor, note, created_at
-            FROM audit_log
-            ORDER BY id DESC
-            LIMIT 100
-            """
-        ).fetchall()
+        if platform:
+            rows = conn.execute(
+                """
+                SELECT id, platform, opportunity_id, action, actor, note, created_at
+                FROM audit_log
+                WHERE platform = ?
+                ORDER BY id DESC
+                LIMIT 100
+                """,
+                (platform,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, platform, opportunity_id, action, actor, note, created_at
+                FROM audit_log
+                ORDER BY id DESC
+                LIMIT 100
+                """
+            ).fetchall()
     return [
         {
             "id": row[0],
-            "opportunity_id": row[1],
-            "action": row[2],
-            "actor": row[3],
-            "note": row[4],
-            "created_at": row[5],
+            "platform": row[1],
+            "opportunity_id": row[2],
+            "action": row[3],
+            "actor": row[4],
+            "note": row[5],
+            "created_at": row[6],
         }
         for row in rows
     ]

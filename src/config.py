@@ -18,13 +18,23 @@ class Settings:
     target_subreddits: list[str]
     pain_subreddits: list[str]
     keywords: list[str]
-    pain_keywords: list[str]
+    reddit_pain_keywords: list[str]
+    twitter_pain_keywords: list[str]
+    reddit_knowledge_block: str
+    twitter_knowledge_block: str
+    reddit_prompt_template: str
+    twitter_prompt_template: str
     poll_seconds: int
     max_items_per_subreddit: int
     min_score: int
     early_reply_window_minutes: int
     google_api_key: str | None
     google_model: str
+    # Twitter / FxTwitter settings
+    twitter_enabled: bool
+    twitter_target_handles: list[str]
+    twitter_queries: list[str]
+    twitter_max_items: int
 
 
 def load_settings() -> Settings:
@@ -36,7 +46,12 @@ def load_settings() -> Settings:
         target_subreddits=_csv(os.getenv("TARGET_SUBREDDITS", "")),
         pain_subreddits=profile.get("subreddits", _csv(os.getenv("PAIN_SUBREDDITS", ""))),
         keywords=[k.lower() for k in _csv(os.getenv("KEYWORDS", ""))],
-        pain_keywords=[k.lower() for k in profile.get("keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))],
+        reddit_pain_keywords=[k.lower() for k in profile.get("reddit_keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))],
+        twitter_pain_keywords=[k.lower() for k in profile.get("twitter_keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))],
+        reddit_knowledge_block=profile.get("reddit_knowledge_block", ""),
+        twitter_knowledge_block=profile.get("twitter_knowledge_block", ""),
+        reddit_prompt_template=profile.get("reddit_prompt_template", "").strip(),
+        twitter_prompt_template=profile.get("twitter_prompt_template", "").strip(),
 
         poll_seconds=int(os.getenv("POLL_SECONDS", "60")),
         max_items_per_subreddit=int(os.getenv("MAX_ITEMS_PER_SUBREDDIT", "50")),
@@ -44,4 +59,9 @@ def load_settings() -> Settings:
         early_reply_window_minutes=int(os.getenv("EARLY_REPLY_WINDOW_MINUTES", "90")),
         google_api_key=os.getenv("GOOGLE_API_KEY", "").strip() or None,
         google_model=os.getenv("GOOGLE_MODEL", "gemma-3-27b-it").strip(),
+        # Twitter / FxTwitter
+        twitter_enabled=os.getenv("TWITTER_ENABLED", "0").strip() in ("1", "true", "yes"),
+        twitter_target_handles=_csv(os.getenv("TWITTER_TARGET_HANDLES", "")),
+        twitter_queries=_csv(os.getenv("TWITTER_QUERIES", "")),
+        twitter_max_items=int(os.getenv("TWITTER_MAX_ITEMS", "25")),
     )

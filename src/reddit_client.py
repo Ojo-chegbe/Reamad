@@ -37,7 +37,7 @@ class RedditClient:
         return response.json()
 
     def get_new_posts(self, subreddit: str, limit: int) -> list[RedditPost]:
-        url = f"https://www.reddit.com/r/{subreddit}/new.json?limit={limit}&raw_json=1"
+        url = f"https://old.reddit.com/r/{subreddit}/new.json?limit={limit}&raw_json=1"
         payload = self._get_json(url)
         children = payload.get("data", {}).get("children", []) if isinstance(payload, dict) else []
         posts: list[RedditPost] = []
@@ -75,7 +75,7 @@ class RedditClient:
         return posts
 
     def get_subreddit_rules(self, subreddit: str) -> list[str]:
-        rules_url = f"https://www.reddit.com/r/{subreddit}/about/rules.json?raw_json=1"
+        rules_url = f"https://old.reddit.com/r/{subreddit}/about/rules.json?raw_json=1"
         payload = self._get_json(rules_url)
         raw_rules = payload.get("rules", []) if isinstance(payload, dict) else []
         lines: list[str] = []
@@ -93,7 +93,7 @@ class RedditClient:
         return lines
 
     def search_subreddits(self, query: str, limit: int = 5) -> list[str]:
-        url = f"https://www.reddit.com/subreddits/search.json?q={query}&limit={limit}&raw_json=1"
+        url = f"https://old.reddit.com/subreddits/search.json?q={query}&limit={limit}&raw_json=1"
         try:
             payload = self._get_json(url)
             children = payload.get("data", {}).get("children", []) if isinstance(payload, dict) else []

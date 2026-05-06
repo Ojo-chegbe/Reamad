@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import threading
+import os
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -52,10 +53,11 @@ class BotRuntime:
                 stdout_handle = self._stdout_path.open("a", encoding="utf-8")
                 stderr_handle = self._stderr_path.open("a", encoding="utf-8")
                 self._proc = subprocess.Popen(
-                    [sys.executable, "-m", "src.main"],
+                    [sys.executable, "-u", "-m", "src.main"],
                     cwd=str(_PROJECT_ROOT),
                     stdout=stdout_handle,
                     stderr=stderr_handle,
+                    env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
                 self._last_returncode = None
@@ -103,7 +105,8 @@ def _bootstrap() -> None:
 @app.get("/api/opportunities")
 def dashboard():
     status = request.args.get("status") or None
-    all_opportunities = list_opportunities()
+    platform = (request.args.get("platform") or "reddit").strip().lower()
+    all_opportunities = list_opportunities(platform=platform)
     
     summary = {
         "pending": len([o for o in all_opportunities if o["status"] == "pending"]),
@@ -119,6 +122,7 @@ def dashboard():
         "opportunities": opportunities,
         "summary": summary,
         "selected_status": status or "all",
+        "platform": platform,
     })
 
 
@@ -149,12 +153,17 @@ def reject(opportunity_id: str):
 @app.post("/api/opportunities/reject_all")
 def reject_all():
     from ui.state import reject_all_pending
-    count = reject_all_pending("operator")
+    platform = (request.args.get("platform") or "reddit").strip().lower()
+    count = reject_all_pending("operator", platform=platform)
     return jsonify({"success": True, "count": count})
 
 
 @app.get("/api/playbooks")
 def playbooks():
+    platform = (request.args.get("platform") or "reddit").strip().lower()
+    if platform != "reddit":
+        return jsonify({"playbooks": [], "platform": platform})
+
     from src.config import load_settings
     from src.reddit_client import make_reddit
     from src.store import Store
@@ -177,12 +186,13 @@ def playbooks():
         
         current = list_playbooks()
 
-    return jsonify({"playbooks": current})
+    return jsonify({"playbooks": current, "platform": platform})
 
 
 @app.get("/api/audit")
 def audit():
-    return jsonify({"logs": list_audit()})
+    platform = (request.args.get("platform") or "reddit").strip().lower()
+    return jsonify({"logs": list_audit(platform=platform), "platform": platform})
 
 
 @app.get("/api/runtime")
@@ -230,10 +240,11 @@ def update_bot_profile():
             stdout_handle = runtime._stdout_path.open("a", encoding="utf-8")
             stderr_handle = runtime._stderr_path.open("a", encoding="utf-8")
             runtime._proc = subprocess.Popen(
-                [sys.executable, "-m", "src.main"],
+                [sys.executable, "-u", "-m", "src.main"],
                 cwd=str(_PROJECT_ROOT),
                 stdout=stdout_handle,
                 stderr=stderr_handle,
+                env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
             
@@ -270,8 +281,13 @@ def api_suggest_keywords():
             return jsonify({"error": "No Google API Key configured."}), 400
 
         profile = get_profile()
-        knowledge = profile.get("knowledge_block", "")
-        current_keywords = profile.get("keywords", [])
+        platform = (request.args.get("platform") or "reddit").strip().lower()
+        if platform == "twitter":
+            knowledge = profile.get("twitter_knowledge_block", "")
+            current_keywords = profile.get("twitter_keywords", [])
+        else:
+            knowledge = profile.get("reddit_knowledge_block", "")
+            current_keywords = profile.get("reddit_keywords", [])
 
         client = genai.Client(api_key=settings.google_api_key)
         prompt = f"""

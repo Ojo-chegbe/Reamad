@@ -40,6 +40,9 @@ DEFAULT_PAIN_KEYWORDS = [
     "can't scale ad creatives",
 ]
 
+DEFAULT_TWITTER_TARGET_HANDLES: list[str] = []
+DEFAULT_TWITTER_QUERIES: list[str] = []
+
 DEFAULT_SOLOA_KNOWLEDGE_BLOCK = dedent(
     """
     Soloa.ai product knowledge:
@@ -57,22 +60,69 @@ DEFAULT_SOLOA_KNOWLEDGE_BLOCK = dedent(
     """
 ).strip()
 
+DEFAULT_REDDIT_PROMPT_TEMPLATE = dedent(
+    """
+    You are writing Reddit comment drafts for manual review.
+    Goal: Write exactly like a normal Reddit user. It must be very simple, casual, and conversational. Flow like a human wrote it off the cuff from their phone.
+    Write exactly 3 short comment drafts.
+    Constraints:
+    - No direct CTA like "buy now", "sign up", "DM me"
+    - Zero AI-speak: do not use words like "crucial", "delve", "furthermore", "in conclusion", or "I understand your frustration"
+    - Write in a conversational, human tone (use natural pacing, avoid overly structured bullet points, occasional lowercase is fine)
+    - Helpful, specific, and extremely simple
+    - Use pain-first framing: acknowledge frustration, give a quick practical tip, then optional subtle mention
+    - Mention Soloa in at most one draft, and only naturally (e.g., "i ended up just using soloa to stop switching tabs so much")
+    - Prefer comments that fit early-thread replies (very concise and actionable)
+    Output as plain text with numbered lines 1..3.
+    """
+).strip()
+
+DEFAULT_TWITTER_PROMPT_TEMPLATE = dedent(
+    """
+    You are writing X/Twitter reply drafts for manual review.
+    Goal: Write like a real X user replying naturally in-thread. Keep it concise, direct, and human.
+    Platform context: X/Twitter public reply
+    Write exactly 3 short reply drafts.
+    Constraints:
+    - No direct CTA like "buy now", "sign up", "DM me"
+    - No hashtags unless absolutely necessary
+    - No AI-speak or corporate tone
+    - Keep each reply short enough for X and easy to post quickly
+    - Useful first, subtle mention optional in at most one draft
+    Output as plain text with numbered lines 1..3.
+    """
+).strip()
+
+
 def get_profile() -> dict:
+    def _normalize(profile: dict) -> dict:
+        legacy_keywords = profile.get("keywords", DEFAULT_PAIN_KEYWORDS)
+        legacy_knowledge = profile.get("knowledge_block", DEFAULT_SOLOA_KNOWLEDGE_BLOCK)
+        return {
+            "subreddits": profile.get("subreddits", DEFAULT_PAIN_SUBREDDITS),
+            "reddit_keywords": profile.get("reddit_keywords", legacy_keywords),
+            "twitter_keywords": profile.get("twitter_keywords", legacy_keywords),
+            "reddit_knowledge_block": profile.get("reddit_knowledge_block", legacy_knowledge),
+            "twitter_knowledge_block": profile.get("twitter_knowledge_block", legacy_knowledge),
+            "reddit_prompt_template": profile.get("reddit_prompt_template", DEFAULT_REDDIT_PROMPT_TEMPLATE),
+            "twitter_prompt_template": profile.get("twitter_prompt_template", DEFAULT_TWITTER_PROMPT_TEMPLATE),
+            "twitter_target_handles": profile.get("twitter_target_handles", DEFAULT_TWITTER_TARGET_HANDLES),
+            "twitter_queries": profile.get("twitter_queries", DEFAULT_TWITTER_QUERIES),
+        }
+
     if _PROFILE_PATH.exists():
         try:
             with open(_PROFILE_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    return _normalize(loaded)
         except Exception:
             pass
-    return {
-        "subreddits": DEFAULT_PAIN_SUBREDDITS,
-        "keywords": DEFAULT_PAIN_KEYWORDS,
-        "knowledge_block": DEFAULT_SOLOA_KNOWLEDGE_BLOCK,
-    }
+    return _normalize({})
 
 def save_profile(data: dict):
     with open(_PROFILE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 def get_knowledge_block() -> str:
-    return get_profile().get("knowledge_block", DEFAULT_SOLOA_KNOWLEDGE_BLOCK)
+    return get_profile().get("reddit_knowledge_block", DEFAULT_SOLOA_KNOWLEDGE_BLOCK)
