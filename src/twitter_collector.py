@@ -11,24 +11,101 @@ from src.models import Opportunity
 from src.scorer import score_post
 from src.store import Store
 from src.twitter_client import TweetPost, TwitterClient
+from src.twitter_relevance import TwitterRelevanceDecision, TwitterRelevanceJudge
+
+
+def _derive_search_queries(prompt_template: str, knowledge_block: str) -> list[str]:
+    del prompt_template
+    source = knowledge_block or ""
+
+    # These are buyer-problem searches derived from the knowledge-box capabilities,
+    # not generic keywords like "AI" or "content".
+    query_groups = [
+        ["need product photos", "amazon listing photos", "shopify product photos", "product photo background"],
+        ["repurpose long video into shorts", "youtube shorts from long video", "turn podcast into clips", "make reels from long video"],
+        ["ugc ads for product", "make ugc ads", "need video ads for product", "product demo video"],
+        ["youtube thumbnail tool", "youtube seo tool", "video ideas for youtube", "validate video ideas"],
+        ["voice clone for videos", "ai narration tool", "remove background noise audio", "clean up audio recording"],
+        ["write amazon listing copy", "seo product descriptions", "amazon bullet points", "shopify product descriptions"],
+        ["schedule tiktok instagram posts", "social media scheduler", "post to tiktok and instagram", "content distribution workflow"],
+        ["ai music generator", "generate original music", "make music without instruments", "song ideas generator"],
+        ["standardize product photos", "batch edit product photos", "bulk product editing", "multi product editor"],
+        ["humanize ai text", "make ai text sound natural", "ai text too robotic", "rewrite ai generated text"],
+    ]
+    lower_source = source.lower()
+
+    queries: list[str] = []
+    for group in query_groups:
+        for query in group:
+            words = [w for w in query.split() if len(w) > 3]
+            if any(word in lower_source for word in words):
+                queries.append(query)
+
+    unique: list[str] = []
+    seen = set()
+    for query in queries:
+        key = query.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(query.strip())
+    return unique[:30]
+
+
+def _chunked_queries(queries: list[str], chunk_size: int = 4) -> list[str]:
+    chunks: list[str] = []
+    for idx in range(0, len(queries), chunk_size):
+        chunk = queries[idx:idx + chunk_size]
+        if not chunk:
+            continue
+        chunks.append(" OR ".join(f'"{term}"' for term in chunk))
+    return chunks
+
+
+def _fallback_decision(tweet: TweetPost, knowledge_block: str, min_score: int) -> TwitterRelevanceDecision:
+    score, reasons = score_post(
+        title=tweet.body[:120],
+        body=tweet.body,
+        subreddit_rules_text="",
+        keywords=[],
+        pain_keywords=[],
+        knowledge_block=knowledge_block,
+        created_utc=tweet.created_at_ts,
+        early_reply_window_minutes=0,
+        platform="twitter",
+    )
+    return TwitterRelevanceDecision(
+        relevant=score >= min_score,
+        score=score,
+        reason="; ".join(reasons[:3]) or "Fallback scorer decision",
+        matched_product_area="lexical knowledge match",
+    )
 
 
 def _tweet_to_opportunity(
     tweet: TweetPost,
-    keywords: list[str],
-    pain_keywords: list[str],
+    knowledge_block: str,
     early_reply_window_minutes: int,
+    relevance: TwitterRelevanceDecision | None = None,
 ) -> Opportunity:
     title = tweet.body[:120]
     score, reasons = score_post(
         title=title,
         body=tweet.body,
         subreddit_rules_text="",
-        keywords=keywords,
-        pain_keywords=pain_keywords,
+        keywords=[],
+        pain_keywords=[],
+        knowledge_block=knowledge_block,
         created_utc=tweet.created_at_ts,
         early_reply_window_minutes=early_reply_window_minutes,
+        platform="twitter",
     )
+    if relevance:
+        score = max(score, relevance.score)
+        reasons.insert(
+            0,
+            f"Twitter relevance {relevance.score}/100: {relevance.reason} ({relevance.matched_product_area})",
+        )
     age_minutes = max(0, int((time.time() - tweet.created_at_ts) / 60)) if tweet.created_at_ts > 0 else 0
     return Opportunity(
         thing_id=tweet.thing_id,
@@ -53,43 +130,77 @@ def collect_fxtwitter_opportunities(
     fxtwitter,  # FxTwitterClient instance
     store: Store,
     target_handles: list[str],
-    query_terms: list[str],
-    keywords: list[str],
-    pain_keywords: list[str],
+    prompt_template: str,
+    knowledge_block: str,
     early_reply_window_minutes: int,
     max_items: int,
     min_score: int,
+    google_api_key: str | None = None,
+    google_model: str = "gemma-3-27b-it",
+    relevance_min_score: int = 75,
 ) -> Iterable[Opportunity]:
     """Collect Twitter opportunities via the free FxTwitter JSON API.
 
     Two-pronged approach (mirrors Reddit's subreddit polling):
-      1. Search by keyword queries (like Reddit keyword matching)
+      1. Search by terms derived from prompt template + knowledge block
       2. Poll each target handle's timeline (like Reddit /r/sub/new.json)
     """
     collected = 0
-
-    # --- Prong 1: keyword search ---
-    if query_terms or pain_keywords:
-        search_terms = list(dict.fromkeys(query_terms + pain_keywords))[:10]
-        # Combine into a single query string (FxTwitter uses Twitter search syntax)
-        query = " OR ".join(
-            f'"{t}"' if " " in t else t for t in search_terms
+    rejected = 0
+    judge = (
+        TwitterRelevanceJudge(
+            api_key=google_api_key,
+            model=google_model,
+            min_score=relevance_min_score,
         )
+        if google_api_key
+        else None
+    )
+
+    def qualify(tweet: TweetPost, source: str) -> Opportunity | None:
+        nonlocal rejected
+        if judge:
+            decision = judge.judge(tweet_text=tweet.body, knowledge_block=knowledge_block)
+        else:
+            decision = _fallback_decision(tweet, knowledge_block, relevance_min_score)
+
+        if not decision.relevant:
+            rejected += 1
+            print(
+                f"  [FxTwitter] REJECTED {source} @{tweet.author} "
+                f"score={decision.score} reason={decision.reason}"
+            )
+            return None
+
+        print(
+            f"  [FxTwitter] PASSED {source} @{tweet.author} "
+            f"score={decision.score} area={decision.matched_product_area}"
+        )
+        return _tweet_to_opportunity(
+            tweet=tweet,
+            knowledge_block=knowledge_block,
+            early_reply_window_minutes=early_reply_window_minutes,
+            relevance=decision,
+        )
+
+    # --- Prong 1: profile-driven search ---
+    search_queries = _chunked_queries(_derive_search_queries(prompt_template, knowledge_block))
+    if search_queries:
         try:
-            tweets = fxtwitter.search(query=query, max_results=min(max_items, 30))
-            for tweet in tweets:
-                if store.is_seen(tweet.thing_id):
-                    continue
-                opp = _tweet_to_opportunity(
-                    tweet=tweet,
-                    keywords=keywords,
-                    pain_keywords=pain_keywords,
-                    early_reply_window_minutes=early_reply_window_minutes,
-                )
-                if opp.score >= min_score:
-                    store.mark_seen(tweet.thing_id)
-                    collected += 1
-                    yield opp
+            per_query_limit = max(3, min(10, max_items // max(1, len(search_queries))))
+            for query in search_queries:
+                print(f"  [FxTwitter] Search query: {query}")
+                tweets = fxtwitter.search(query=query, max_results=per_query_limit)
+                for tweet in tweets:
+                    if store.is_seen(tweet.thing_id):
+                        continue
+                    opp = qualify(tweet, "search")
+                    if not opp:
+                        continue
+                    if opp.score >= min_score:
+                        store.mark_seen(tweet.thing_id)
+                        collected += 1
+                        yield opp
         except Exception as exc:
             print(f"  [FxTwitter] Search failed: {exc}")
 
@@ -100,12 +211,9 @@ def collect_fxtwitter_opportunities(
             for tweet in tweets:
                 if store.is_seen(tweet.thing_id):
                     continue
-                opp = _tweet_to_opportunity(
-                    tweet=tweet,
-                    keywords=keywords,
-                    pain_keywords=pain_keywords,
-                    early_reply_window_minutes=early_reply_window_minutes,
-                )
+                opp = qualify(tweet, f"timeline:{handle}")
+                if not opp:
+                    continue
                 if opp.score >= min_score:
                     store.mark_seen(tweet.thing_id)
                     collected += 1
@@ -113,7 +221,7 @@ def collect_fxtwitter_opportunities(
         except Exception as exc:
             print(f"  [FxTwitter] Timeline @{handle} failed: {exc}")
 
-    print(f"  [FxTwitter] Collected {collected} opportunities this cycle")
+    print(f"  [FxTwitter] Collected {collected} opportunities this cycle; rejected {rejected}")
 
 
 # ============================================================================
@@ -147,6 +255,7 @@ def collect_twitter_opportunities(
     query_terms: list[str],
     keywords: list[str],
     pain_keywords: list[str],
+    knowledge_block: str,
     early_reply_window_minutes: int,
     max_items: int,
     min_score: int,
@@ -164,8 +273,7 @@ def collect_twitter_opportunities(
             continue
         opp = _tweet_to_opportunity(
             tweet=tweet,
-            keywords=keywords,
-            pain_keywords=pain_keywords,
+            knowledge_block=knowledge_block,
             early_reply_window_minutes=early_reply_window_minutes,
         )
         if opp.score >= min_score:
@@ -195,6 +303,7 @@ def collect_twitter_rss_opportunities(
     target_handles: list[str],
     keywords: list[str],
     pain_keywords: list[str],
+    knowledge_block: str,
     early_reply_window_minutes: int,
     max_items: int,
     min_score: int,
@@ -243,8 +352,7 @@ def collect_twitter_rss_opportunities(
             )
             opp = _tweet_to_opportunity(
                 tweet=tweet,
-                keywords=keywords,
-                pain_keywords=pain_keywords,
+                knowledge_block=knowledge_block,
                 early_reply_window_minutes=early_reply_window_minutes,
             )
             if opp.score >= min_score:

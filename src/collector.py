@@ -14,6 +14,7 @@ def _build_opportunity(
     rules_text: str,
     keywords: list[str],
     pain_keywords: list[str],
+    knowledge_block: str,
     early_reply_window_minutes: int,
 ) -> Opportunity:
     body = submission.body or ""
@@ -23,6 +24,7 @@ def _build_opportunity(
         subreddit_rules_text=rules_text,
         keywords=keywords,
         pain_keywords=pain_keywords,
+        knowledge_block=knowledge_block,
         created_utc=submission.created_utc,
         early_reply_window_minutes=early_reply_window_minutes,
     )
@@ -47,6 +49,7 @@ def collect_opportunities(
     subreddits: list[str],
     keywords: list[str],
     pain_keywords: list[str],
+    knowledge_block: str,
     early_reply_window_minutes: int,
     max_items_per_subreddit: int,
     min_score: int,
@@ -75,6 +78,7 @@ def collect_opportunities(
                 rules_text=rules_text,
                 keywords=keywords,
                 pain_keywords=pain_keywords,
+                knowledge_block=knowledge_block,
                 early_reply_window_minutes=early_reply_window_minutes,
             )
             if opp.score >= min_score:

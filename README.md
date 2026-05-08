@@ -25,6 +25,7 @@ Optional:
 - `PAIN_SUBREDDITS` for pain-heavy communities (creator, marketing, productivity, indie)
 - `PAIN_KEYWORDS` for frustration signals (for example "this is taking too long")
 - `EARLY_REPLY_WINDOW_MINUTES` for freshness scoring boost (default: `90`)
+- `TWITTER_RELEVANCE_MIN_SCORE` for X/Twitter semantic filtering (default: `25`)
 
 ## 2) Run
 

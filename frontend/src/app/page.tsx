@@ -71,6 +71,20 @@ interface BotProfile {
   twitter_queries: string[];
 }
 
+interface EngineRuntimeStatus {
+  running: boolean;
+  pid: number | null;
+  last_returncode: number | null;
+}
+
+interface RuntimeStatusPayload {
+  running: boolean;
+  engines?: {
+    reddit?: EngineRuntimeStatus;
+    twitter?: EngineRuntimeStatus;
+  };
+}
+
 type AuditActionFilter = "all" | "approved" | "rejected";
 type ConfigTab = "profile" | "playbooks";
 type Platform = "reddit" | "twitter";
@@ -101,6 +115,14 @@ export default function Gatekeeper() {
   const [botRunning, setBotRunning] = useState<boolean>(false);
   const [triageMenuOpen, setTriageMenuOpen] = useState<boolean>(false);
   const [runtimeLoading, setRuntimeLoading] = useState<boolean>(false);
+  const [engineLoading, setEngineLoading] = useState<string | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusPayload>({
+    running: false,
+    engines: {
+      reddit: { running: false, pid: null, last_returncode: null },
+      twitter: { running: false, pid: null, last_returncode: null },
+    },
+  });
 
   const [subredditInput, setSubredditInput] = useState("");
   const [twitterHandleInput, setTwitterHandleInput] = useState("");
@@ -169,7 +191,8 @@ export default function Gatekeeper() {
     try {
       const res = await fetch("/api/runtime");
       if (!res.ok) throw new Error("Failed to fetch runtime status");
-      const data = await res.json();
+      const data: RuntimeStatusPayload = await res.json();
+      setRuntimeStatus(data);
       setBotRunning(Boolean(data.running));
     } catch (err) {
       console.error(err);
@@ -304,6 +327,24 @@ export default function Gatekeeper() {
     }
   };
 
+  const toggleEngine = async (engine: "reddit" | "twitter") => {
+    setEngineLoading(engine);
+    try {
+      const isRunning = Boolean(runtimeStatus.engines?.[engine]?.running);
+      const endpoint = isRunning
+        ? `/api/runtime/stop?engine=${engine}`
+        : `/api/runtime/start?engine=${engine}`;
+      const res = await fetch(endpoint, { method: "POST" });
+      if (!res.ok) throw new Error(`Failed to change ${engine} runtime state`);
+      await fetchRuntimeStatus();
+      void fetchOpportunities();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setEngineLoading(null);
+    }
+  };
+
   const handleAction = async (id: string, action: "approve" | "reject") => {
     try {
       const res = await fetch(`/api/opportunity/${id}/${action}`, {
@@ -422,6 +463,30 @@ export default function Gatekeeper() {
                   : botRunning
                     ? <><Square size={14} fill="currentColor" /> STOP ENGINE</>
                     : <><Play size={14} fill="currentColor" /> START ENGINE</>}
+              </button>
+              <button
+                className={`btn-start-bot ${runtimeStatus.engines?.reddit?.running ? "active" : ""}`}
+                onClick={() => toggleEngine("reddit")}
+                disabled={runtimeLoading || engineLoading !== null}
+                title={runtimeStatus.engines?.reddit?.running ? "Stop Reddit engine only" : "Start Reddit engine only"}
+              >
+                {engineLoading === "reddit"
+                  ? "WAIT..."
+                  : runtimeStatus.engines?.reddit?.running
+                    ? <><Square size={14} fill="currentColor" /> STOP REDDIT</>
+                    : <><Play size={14} fill="currentColor" /> START REDDIT</>}
+              </button>
+              <button
+                className={`btn-start-bot ${runtimeStatus.engines?.twitter?.running ? "active" : ""}`}
+                onClick={() => toggleEngine("twitter")}
+                disabled={runtimeLoading || engineLoading !== null}
+                title={runtimeStatus.engines?.twitter?.running ? "Stop Twitter engine only" : "Start Twitter engine only"}
+              >
+                {engineLoading === "twitter"
+                  ? "WAIT..."
+                  : runtimeStatus.engines?.twitter?.running
+                    ? <><Square size={14} fill="currentColor" /> STOP TWITTER</>
+                    : <><Play size={14} fill="currentColor" /> START TWITTER</>}
               </button>
             </div>
             <Bell className="topbar-icon" />

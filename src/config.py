@@ -35,6 +35,8 @@ class Settings:
     twitter_target_handles: list[str]
     twitter_queries: list[str]
     twitter_max_items: int
+    twitter_min_score: int
+    twitter_relevance_min_score: int
 
 
 def load_settings() -> Settings:
@@ -64,4 +66,6 @@ def load_settings() -> Settings:
         twitter_target_handles=_csv(os.getenv("TWITTER_TARGET_HANDLES", "")),
         twitter_queries=_csv(os.getenv("TWITTER_QUERIES", "")),
         twitter_max_items=int(os.getenv("TWITTER_MAX_ITEMS", "25")),
+        twitter_min_score=int(os.getenv("TWITTER_MIN_SCORE", "8")),
+        twitter_relevance_min_score=int(os.getenv("TWITTER_RELEVANCE_MIN_SCORE", "25")),
     )

@@ -25,72 +25,102 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 class BotRuntime:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._proc: subprocess.Popen[str] | None = None
-        self._last_returncode: int | None = None
-        self._stdout_path = _PROJECT_ROOT / "run.out.log"
-        self._stderr_path = _PROJECT_ROOT / "run.err.log"
+        self._procs: dict[str, subprocess.Popen[str] | None] = {"reddit": None, "twitter": None}
+        self._last_returncodes: dict[str, int | None] = {"reddit": None, "twitter": None}
 
-    def _refresh(self) -> None:
-        if self._proc and self._proc.poll() is not None:
-            self._last_returncode = self._proc.returncode
-            self._proc = None
+    def _stdout_path(self, engine: str) -> Path:
+        return _PROJECT_ROOT / f"run.{engine}.out.log"
 
-    def status(self) -> dict[str, int | bool | None]:
+    def _stderr_path(self, engine: str) -> Path:
+        return _PROJECT_ROOT / f"run.{engine}.err.log"
+
+    def _refresh_engine(self, engine: str) -> None:
+        proc = self._procs[engine]
+        if proc and proc.poll() is not None:
+            self._last_returncodes[engine] = proc.returncode
+            self._procs[engine] = None
+
+    def _engine_status(self, engine: str) -> dict[str, int | bool | None]:
+        self._refresh_engine(engine)
+        proc = self._procs[engine]
+        return {
+            "running": proc is not None,
+            "pid": proc.pid if proc else None,
+            "last_returncode": self._last_returncodes[engine],
+        }
+
+    def status(self) -> dict[str, object]:
         with self._lock:
-            self._refresh()
+            reddit = self._engine_status("reddit")
+            twitter = self._engine_status("twitter")
             return {
-                "running": self._proc is not None,
-                "pid": self._proc.pid if self._proc else None,
-                "last_returncode": self._last_returncode,
+                "running": bool(reddit["running"] or twitter["running"]),
+                "engines": {
+                    "reddit": reddit,
+                    "twitter": twitter,
+                },
             }
 
-    def start(self) -> dict[str, int | bool | None]:
+    def start_engine(self, engine: str) -> dict[str, int | bool | None]:
+        if engine not in ("reddit", "twitter"):
+            raise ValueError("engine must be reddit or twitter")
         with self._lock:
-            self._refresh()
-            if self._proc is None:
-                self._stdout_path.write_text("")
-                self._stderr_path.write_text("")
-                stdout_handle = self._stdout_path.open("a", encoding="utf-8")
-                stderr_handle = self._stderr_path.open("a", encoding="utf-8")
-                self._proc = subprocess.Popen(
+            self._refresh_engine(engine)
+            proc = self._procs[engine]
+            if proc is None:
+                out_path = self._stdout_path(engine)
+                err_path = self._stderr_path(engine)
+                out_path.write_text("")
+                err_path.write_text("")
+                stdout_handle = out_path.open("a", encoding="utf-8")
+                stderr_handle = err_path.open("a", encoding="utf-8")
+                self._procs[engine] = subprocess.Popen(
                     [sys.executable, "-u", "-m", "src.main"],
                     cwd=str(_PROJECT_ROOT),
                     stdout=stdout_handle,
                     stderr=stderr_handle,
-                    env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+                    env={
+                        **os.environ,
+                        "PYTHONUTF8": "1",
+                        "PYTHONIOENCODING": "utf-8",
+                        "ENGINE_MODE": engine,
+                    },
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
-                self._last_returncode = None
-            return {
-                "running": True,
-                "pid": self._proc.pid,
-                "last_returncode": self._last_returncode,
-            }
+                self._last_returncodes[engine] = None
+            return self._engine_status(engine)
 
-    def stop(self) -> dict[str, int | bool | None]:
+    def stop_engine(self, engine: str) -> dict[str, int | bool | None]:
+        if engine not in ("reddit", "twitter"):
+            raise ValueError("engine must be reddit or twitter")
         with self._lock:
-            self._refresh()
-            if self._proc is None:
-                return {
-                    "running": False,
-                    "pid": None,
-                    "last_returncode": self._last_returncode,
-                }
-
-            proc = self._proc
+            self._refresh_engine(engine)
+            proc = self._procs[engine]
+            if proc is None:
+                return self._engine_status(engine)
             proc.terminate()
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
-            self._last_returncode = proc.returncode
-            self._proc = None
-            return {
-                "running": False,
-                "pid": None,
-                "last_returncode": self._last_returncode,
-            }
+            self._last_returncodes[engine] = proc.returncode
+            self._procs[engine] = None
+            return self._engine_status(engine)
+
+    def start(self, engine: str = "both") -> dict[str, object]:
+        if engine == "both":
+            self.start_engine("reddit")
+            self.start_engine("twitter")
+            return self.status()
+        return {"engine": engine, **self.start_engine(engine)}
+
+    def stop(self, engine: str = "both") -> dict[str, object]:
+        if engine == "both":
+            self.stop_engine("reddit")
+            self.stop_engine("twitter")
+            return self.status()
+        return {"engine": engine, **self.stop_engine(engine)}
 
 
 runtime = BotRuntime()
@@ -202,12 +232,18 @@ def runtime_status():
 
 @app.post("/api/runtime/start")
 def runtime_start():
-    return jsonify(runtime.start())
+    engine = (request.args.get("engine") or "both").strip().lower()
+    if engine not in ("both", "reddit", "twitter"):
+        return jsonify({"error": "Invalid engine. Use both, reddit, or twitter."}), 400
+    return jsonify(runtime.start(engine=engine))
 
 
 @app.post("/api/runtime/stop")
 def runtime_stop():
-    return jsonify(runtime.stop())
+    engine = (request.args.get("engine") or "both").strip().lower()
+    if engine not in ("both", "reddit", "twitter"):
+        return jsonify({"error": "Invalid engine. Use both, reddit, or twitter."}), 400
+    return jsonify(runtime.stop(engine=engine))
 
 
 @app.get("/api/profile")
@@ -222,31 +258,14 @@ def update_bot_profile():
     data = request.get_json() or {}
     save_profile(data)
     
-    # Restart the bot to apply new configuration
-    with runtime._lock:
-        if runtime._proc:
-            runtime._proc.terminate()
-            try:
-                runtime._proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                runtime._proc.kill()
-                runtime._proc.wait(timeout=5)
-            runtime._proc = None
-            runtime._last_returncode = None
-            
-            # Start again
-            runtime._stdout_path.write_text("")
-            runtime._stderr_path.write_text("")
-            stdout_handle = runtime._stdout_path.open("a", encoding="utf-8")
-            stderr_handle = runtime._stderr_path.open("a", encoding="utf-8")
-            runtime._proc = subprocess.Popen(
-                [sys.executable, "-u", "-m", "src.main"],
-                cwd=str(_PROJECT_ROOT),
-                stdout=stdout_handle,
-                stderr=stderr_handle,
-                env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
+    # Restart whichever engines are currently running to apply new configuration.
+    status = runtime.status()
+    engines = status.get("engines", {})
+    for engine in ("reddit", "twitter"):
+        details = engines.get(engine, {})
+        if isinstance(details, dict) and details.get("running"):
+            runtime.stop(engine=engine)
+            runtime.start(engine=engine)
             
     return jsonify({"success": True})
 

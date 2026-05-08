@@ -188,7 +188,7 @@ def list_opportunities(status: str | None = None, platform: str | None = None) -
     if where_parts:
         query += " WHERE " + " AND ".join(where_parts)
     params: tuple[Any, ...] = tuple(params_list)
-    query += " ORDER BY score DESC, created_at DESC"
+    query += " ORDER BY created_at DESC, score DESC"
 
     with _conn() as conn:
         rows = conn.execute(query, params).fetchall()
