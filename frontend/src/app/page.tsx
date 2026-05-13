@@ -211,6 +211,7 @@ export default function Gatekeeper() {
   const [triageMenuOpen, setTriageMenuOpen] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [engineLoading, setEngineLoading] = useState<string | null>(null);
+  const [runtimeMessage, setRuntimeMessage] = useState("");
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusPayload>({
     running: false,
     engines: {
@@ -297,8 +298,10 @@ export default function Gatekeeper() {
       const data: RuntimeStatusPayload = await res.json();
       setRuntimeStatus(data);
       setBotRunning(Boolean(data.running));
+      setRuntimeMessage("");
     } catch (err) {
       console.error(err);
+      setRuntimeMessage("Runtime API unavailable. Ensure backend is running on 127.0.0.1:5050.");
     }
   }, []);
 
@@ -404,14 +407,25 @@ export default function Gatekeeper() {
 
   const toggleRuntime = async () => {
     setRuntimeLoading(true);
+    setRuntimeMessage("");
     try {
       const endpoint = botRunning ? "/api/runtime/stop" : "/api/runtime/start";
       const res = await fetch(endpoint, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to change runtime state");
+      if (!res.ok) {
+        let reason = "Failed to change runtime state";
+        try {
+          const payload = await res.json();
+          if (payload?.error) reason = String(payload.error);
+        } catch {
+          // Keep default reason when response body is not JSON.
+        }
+        throw new Error(reason);
+      }
       await fetchRuntimeStatus();
       void fetchOpportunities();
     } catch (err) {
       console.error(err);
+      setRuntimeMessage(err instanceof Error ? err.message : "Failed to change runtime state");
     } finally {
       setRuntimeLoading(false);
     }
@@ -419,15 +433,26 @@ export default function Gatekeeper() {
 
   const toggleEngine = async (engine: "reddit" | "twitter") => {
     setEngineLoading(engine);
+    setRuntimeMessage("");
     try {
       const isRunning = Boolean(runtimeStatus.engines?.[engine]?.running);
       const endpoint = isRunning ? `/api/runtime/stop?engine=${engine}` : `/api/runtime/start?engine=${engine}`;
       const res = await fetch(endpoint, { method: "POST" });
-      if (!res.ok) throw new Error(`Failed to change ${engine} runtime state`);
+      if (!res.ok) {
+        let reason = `Failed to change ${engine} runtime state`;
+        try {
+          const payload = await res.json();
+          if (payload?.error) reason = String(payload.error);
+        } catch {
+          // Keep default reason when response body is not JSON.
+        }
+        throw new Error(reason);
+      }
       await fetchRuntimeStatus();
       void fetchOpportunities();
     } catch (err) {
       console.error(err);
+      setRuntimeMessage(err instanceof Error ? err.message : `Failed to change ${engine} runtime state`);
     } finally {
       setEngineLoading(null);
     }
@@ -614,6 +639,7 @@ export default function Gatekeeper() {
                 </button>
               ))}
             </div>
+            {runtimeMessage ? <div className="profile-message" style={{ marginLeft: "0.75rem", maxWidth: "360px" }}>{runtimeMessage}</div> : null}
             <HelpCircle className="topbar-icon" />
             <div className="user-avatar" />
           </div>
