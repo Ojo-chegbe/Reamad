@@ -42,6 +42,20 @@ DEFAULT_PAIN_KEYWORDS = [
 
 DEFAULT_TWITTER_TARGET_HANDLES: list[str] = []
 DEFAULT_TWITTER_QUERIES: list[str] = []
+DEFAULT_BUYING_SIGNALS = [
+    "looking for",
+    "any tools for",
+    "switching from",
+    "too expensive",
+    "how do i automate",
+    "alternative to",
+]
+DEFAULT_FORBIDDEN_PHRASES = [
+    "buy now",
+    "sign up today",
+    "limited time",
+    "dm me",
+]
 
 DEFAULT_SOLOA_KNOWLEDGE_BLOCK = dedent(
     """
@@ -99,9 +113,20 @@ def get_profile() -> dict:
         legacy_keywords = profile.get("keywords", DEFAULT_PAIN_KEYWORDS)
         legacy_knowledge = profile.get("knowledge_block", DEFAULT_SOLOA_KNOWLEDGE_BLOCK)
         return {
+            "campaign_name": profile.get("campaign_name", "SoloaAI growth monitoring"),
+            "target_audience": profile.get("target_audience", "creators, ecommerce sellers, marketers, founders, agencies"),
+            "product_area": profile.get("product_area", "AI creative workflow consolidation"),
             "subreddits": profile.get("subreddits", DEFAULT_PAIN_SUBREDDITS),
             "reddit_keywords": profile.get("reddit_keywords", legacy_keywords),
             "twitter_keywords": profile.get("twitter_keywords", legacy_keywords),
+            "competitors": profile.get("competitors", []),
+            "buying_signals": profile.get("buying_signals", DEFAULT_BUYING_SIGNALS),
+            "forbidden_phrases": profile.get("forbidden_phrases", DEFAULT_FORBIDDEN_PHRASES),
+            "max_replies_per_community_per_day": profile.get("max_replies_per_community_per_day", 8),
+            "disclosure_policy": profile.get(
+                "disclosure_policy",
+                "Be transparent when a relationship exists. Default to practical help before any product mention.",
+            ),
             "reddit_knowledge_block": profile.get("reddit_knowledge_block", legacy_knowledge),
             "twitter_knowledge_block": profile.get("twitter_knowledge_block", legacy_knowledge),
             "reddit_prompt_template": profile.get("reddit_prompt_template", DEFAULT_REDDIT_PROMPT_TEMPLATE),

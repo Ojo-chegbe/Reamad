@@ -97,6 +97,7 @@ def run() -> None:
                         reasons=opp.reasons,
                         drafts=drafts,
                     )
+                    store.mark_seen(opp.thing_id)
             except Exception as exc:
                 print(f"Reddit loop error: {exc}")
 
@@ -109,6 +110,7 @@ def run() -> None:
                     fxtwitter=fxtwitter,
                     store=store,
                     target_handles=settings.twitter_target_handles,
+                    query_terms=settings.twitter_queries,
                     prompt_template=settings.twitter_prompt_template,
                     knowledge_block=settings.twitter_knowledge_block,
                     early_reply_window_minutes=settings.early_reply_window_minutes,
@@ -137,6 +139,7 @@ def run() -> None:
                         reasons=opp.reasons,
                         drafts=drafts,
                     )
+                    store.mark_seen(opp.thing_id)
                     print(f"Cycle {cycle}: saved Twitter drafts for {opp.thing_id}")
                 print(f"Cycle {cycle}: found {twitter_found} Twitter opportunities")
             except Exception as exc:

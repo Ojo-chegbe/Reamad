@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,18 @@ from typing import Any
 
 DB_PATH = Path("ui_state.db")
 DEFAULT_REJECTED_RETENTION_HOURS = 24
+PIPELINE_STAGES = {
+    "new",
+    "qualified",
+    "drafted",
+    "approved",
+    "posted",
+    "replied_back",
+    "converted",
+    "lost",
+    "rejected",
+    "pending",
+}
 
 
 def _conn() -> sqlite3.Connection:
@@ -57,6 +70,27 @@ def init_db() -> None:
             conn.execute(
                 "UPDATE opportunities SET status_updated_at = created_at WHERE status_updated_at IS NULL"
             )
+        extra_columns = {
+            "posted_reply_url": "TEXT NOT NULL DEFAULT ''",
+            "selected_draft_index": "INTEGER",
+            "replied_at": "DATETIME",
+            "followup_sentiment": "TEXT NOT NULL DEFAULT ''",
+            "clicks": "INTEGER NOT NULL DEFAULT 0",
+            "signups": "INTEGER NOT NULL DEFAULT 0",
+            "conversion_value": "REAL NOT NULL DEFAULT 0",
+            "next_follow_up_at": "DATETIME",
+            "operator_notes": "TEXT NOT NULL DEFAULT ''",
+            "feedback_label": "TEXT NOT NULL DEFAULT ''",
+            "feedback_note": "TEXT NOT NULL DEFAULT ''",
+            "campaign_name": "TEXT NOT NULL DEFAULT ''",
+            "product_area": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "DATETIME",
+        }
+        for column, definition in extra_columns.items():
+            if column not in column_names:
+                conn.execute(f"ALTER TABLE opportunities ADD COLUMN {column} {definition}")
+        conn.execute("UPDATE opportunities SET status = 'new' WHERE status = 'pending'")
+        conn.execute("UPDATE opportunities SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS playbooks (
@@ -174,7 +208,10 @@ def seed_if_empty() -> None:
 def list_opportunities(status: str | None = None, platform: str | None = None) -> list[dict[str, Any]]:
     purge_expired_rejected_opportunities()
     query = """
-        SELECT id, platform, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at
+        SELECT id, platform, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at,
+               posted_reply_url, selected_draft_index, replied_at, followup_sentiment, clicks, signups,
+               conversion_value, next_follow_up_at, operator_notes, feedback_label, feedback_note,
+               campaign_name, product_area, updated_at
         FROM opportunities
     """
     where_parts: list[str] = []
@@ -208,6 +245,20 @@ def list_opportunities(status: str | None = None, platform: str | None = None) -
                 "reasons": json.loads(row[8]),
                 "drafts": json.loads(row[9]),
                 "created_at": row[10],
+                "posted_reply_url": row[11],
+                "selected_draft_index": row[12],
+                "replied_at": row[13],
+                "followup_sentiment": row[14],
+                "clicks": row[15],
+                "signups": row[16],
+                "conversion_value": row[17],
+                "next_follow_up_at": row[18],
+                "operator_notes": row[19],
+                "feedback_label": row[20],
+                "feedback_note": row[21],
+                "campaign_name": row[22],
+                "product_area": row[23],
+                "updated_at": row[24],
             }
         )
     return output
@@ -232,7 +283,10 @@ def get_opportunity(opportunity_id: str) -> dict[str, Any] | None:
     with _conn() as conn:
         row = conn.execute(
             """
-            SELECT id, platform, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at
+            SELECT id, platform, subreddit, title, body, url, score, status, reasons_json, drafts_json, created_at,
+                   posted_reply_url, selected_draft_index, replied_at, followup_sentiment, clicks, signups,
+                   conversion_value, next_follow_up_at, operator_notes, feedback_label, feedback_note,
+                   campaign_name, product_area, updated_at
             FROM opportunities
             WHERE id = ?
             """,
@@ -252,6 +306,20 @@ def get_opportunity(opportunity_id: str) -> dict[str, Any] | None:
         "reasons": json.loads(row[8]),
         "drafts": json.loads(row[9]),
         "created_at": row[10],
+        "posted_reply_url": row[11],
+        "selected_draft_index": row[12],
+        "replied_at": row[13],
+        "followup_sentiment": row[14],
+        "clicks": row[15],
+        "signups": row[16],
+        "conversion_value": row[17],
+        "next_follow_up_at": row[18],
+        "operator_notes": row[19],
+        "feedback_label": row[20],
+        "feedback_note": row[21],
+        "campaign_name": row[22],
+        "product_area": row[23],
+        "updated_at": row[24],
     }
 
 
@@ -292,7 +360,8 @@ def upsert_opportunity(
                 score = excluded.score,
                 reasons_json = excluded.reasons_json,
                 drafts_json = excluded.drafts_json,
-                status = opportunities.status
+                status = opportunities.status,
+                updated_at = CURRENT_TIMESTAMP
             """,
             (
                 opportunity_id,
@@ -336,6 +405,8 @@ def upsert_playbook(subreddit: str, rules_text: str) -> None:
 
 
 def update_status(opportunity_id: str, status: str, actor: str, note: str = "") -> None:
+    if status not in PIPELINE_STAGES:
+        raise ValueError(f"Unsupported status: {status}")
     with _conn() as conn:
         platform_row = conn.execute(
             "SELECT platform FROM opportunities WHERE id = ?",
@@ -343,7 +414,11 @@ def update_status(opportunity_id: str, status: str, actor: str, note: str = "") 
         ).fetchone()
         platform = platform_row[0] if platform_row and platform_row[0] else "reddit"
         conn.execute(
-            "UPDATE opportunities SET status = ?, status_updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            """
+            UPDATE opportunities
+            SET status = ?, status_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
             (status, opportunity_id),
         )
         conn.execute(
@@ -352,10 +427,96 @@ def update_status(opportunity_id: str, status: str, actor: str, note: str = "") 
         )
 
 
+def update_outcome(
+    opportunity_id: str,
+    actor: str,
+    posted_reply_url: str = "",
+    selected_draft_index: int | None = None,
+    replied_at: str | None = None,
+    followup_sentiment: str = "",
+    clicks: int | None = None,
+    signups: int | None = None,
+    conversion_value: float | None = None,
+    next_follow_up_at: str | None = None,
+    operator_notes: str = "",
+    status: str | None = None,
+) -> None:
+    if status and status not in PIPELINE_STAGES:
+        raise ValueError(f"Unsupported status: {status}")
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT platform, status FROM opportunities WHERE id = ?",
+            (opportunity_id,),
+        ).fetchone()
+        if not existing:
+            raise ValueError("Opportunity not found")
+        platform = existing[0] or "reddit"
+        next_status = status or existing[1]
+        conn.execute(
+            """
+            UPDATE opportunities
+            SET posted_reply_url = ?,
+                selected_draft_index = ?,
+                replied_at = ?,
+                followup_sentiment = ?,
+                clicks = COALESCE(?, clicks),
+                signups = COALESCE(?, signups),
+                conversion_value = COALESCE(?, conversion_value),
+                next_follow_up_at = ?,
+                operator_notes = ?,
+                status = ?,
+                status_updated_at = CASE WHEN status != ? THEN CURRENT_TIMESTAMP ELSE status_updated_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                posted_reply_url,
+                selected_draft_index,
+                replied_at,
+                followup_sentiment,
+                clicks,
+                signups,
+                conversion_value,
+                next_follow_up_at,
+                operator_notes,
+                next_status,
+                next_status,
+                opportunity_id,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (platform, opportunity_id, action, actor, note) VALUES (?, ?, ?, ?, ?)",
+            (platform, opportunity_id, "outcome_updated", actor, operator_notes),
+        )
+
+
+def update_feedback(opportunity_id: str, label: str, actor: str, note: str = "") -> None:
+    with _conn() as conn:
+        platform_row = conn.execute(
+            "SELECT platform FROM opportunities WHERE id = ?",
+            (opportunity_id,),
+        ).fetchone()
+        if not platform_row:
+            raise ValueError("Opportunity not found")
+        platform = platform_row[0] or "reddit"
+        conn.execute(
+            """
+            UPDATE opportunities
+            SET feedback_label = ?, feedback_note = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (label, note, opportunity_id),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (platform, opportunity_id, action, actor, note) VALUES (?, ?, ?, ?, ?)",
+            (platform, opportunity_id, f"feedback:{label}", actor, note),
+        )
+
+
 def reject_all_pending(actor: str, platform: str | None = None) -> int:
     with _conn() as conn:
         params: tuple[Any, ...] = ()
-        query = "SELECT id FROM opportunities WHERE status = 'pending'"
+        query = "SELECT id FROM opportunities WHERE status IN ('new', 'qualified', 'drafted', 'pending')"
         if platform:
             query += " AND platform = ?"
             params = (platform,)
@@ -365,12 +526,12 @@ def reject_all_pending(actor: str, platform: str | None = None) -> int:
         ids = [r[0] for r in rows]
         if platform:
             conn.execute(
-                "UPDATE opportunities SET status = 'rejected', status_updated_at = CURRENT_TIMESTAMP WHERE status = 'pending' AND platform = ?",
+                "UPDATE opportunities SET status = 'rejected', status_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE status IN ('new', 'qualified', 'drafted', 'pending') AND platform = ?",
                 (platform,),
             )
         else:
             conn.execute(
-                "UPDATE opportunities SET status = 'rejected', status_updated_at = CURRENT_TIMESTAMP WHERE status = 'pending'"
+                "UPDATE opportunities SET status = 'rejected', status_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE status IN ('new', 'qualified', 'drafted', 'pending')"
             )
         audit_data = [(platform or "reddit", opp_id, 'rejected', actor, 'Bulk discarded') for opp_id in ids]
         conn.executemany(
@@ -414,3 +575,52 @@ def list_audit(platform: str | None = None) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def analytics(platform: str | None = None) -> dict[str, Any]:
+    rows = list_opportunities(platform=platform)
+    stage_counts = Counter(row["status"] for row in rows)
+    total = len(rows)
+    approved = stage_counts["approved"] + stage_counts["posted"] + stage_counts["replied_back"] + stage_counts["converted"]
+    posted = stage_counts["posted"] + stage_counts["replied_back"] + stage_counts["converted"]
+    replied = stage_counts["replied_back"] + stage_counts["converted"]
+    converted = stage_counts["converted"]
+
+    by_channel: dict[str, int] = defaultdict(int)
+    by_product_area: dict[str, int] = defaultdict(int)
+    by_feedback: dict[str, int] = defaultdict(int)
+    by_day: dict[str, int] = defaultdict(int)
+    pipeline_value = 0.0
+    clicks = 0
+    signups = 0
+    for row in rows:
+        by_channel[row["subreddit"]] += 1
+        if row.get("product_area"):
+            by_product_area[row["product_area"]] += 1
+        if row.get("feedback_label"):
+            by_feedback[row["feedback_label"]] += 1
+        if row.get("created_at"):
+            by_day[str(row["created_at"])[:10]] += 1
+        pipeline_value += float(row.get("conversion_value") or 0)
+        clicks += int(row.get("clicks") or 0)
+        signups += int(row.get("signups") or 0)
+
+    def rate(part: int) -> float:
+        return round((part / total) * 100, 1) if total else 0.0
+
+    return {
+        "total": total,
+        "stage_counts": dict(stage_counts),
+        "approval_rate": rate(approved),
+        "posted_rate": rate(posted),
+        "reply_rate": rate(replied),
+        "conversion_rate": rate(converted),
+        "clicks": clicks,
+        "signups": signups,
+        "pipeline_value": round(pipeline_value, 2),
+        "estimated_time_saved_minutes": posted * 8 + approved * 3,
+        "best_channels": sorted(by_channel.items(), key=lambda item: item[1], reverse=True)[:8],
+        "best_product_areas": sorted(by_product_area.items(), key=lambda item: item[1], reverse=True)[:8],
+        "feedback": dict(by_feedback),
+        "opportunities_by_day": dict(sorted(by_day.items())),
+    }

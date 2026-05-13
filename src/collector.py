@@ -82,5 +82,4 @@ def collect_opportunities(
                 early_reply_window_minutes=early_reply_window_minutes,
             )
             if opp.score >= min_score:
-                store.mark_seen(submission.thing_id)
                 yield opp

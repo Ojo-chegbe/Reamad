@@ -130,6 +130,7 @@ def collect_fxtwitter_opportunities(
     fxtwitter,  # FxTwitterClient instance
     store: Store,
     target_handles: list[str],
+    query_terms: list[str],
     prompt_template: str,
     knowledge_block: str,
     early_reply_window_minutes: int,
@@ -184,7 +185,9 @@ def collect_fxtwitter_opportunities(
         )
 
     # --- Prong 1: profile-driven search ---
-    search_queries = _chunked_queries(_derive_search_queries(prompt_template, knowledge_block))
+    profile_queries = [q.strip() for q in query_terms if q.strip()]
+    derived_queries = _derive_search_queries(prompt_template, knowledge_block)
+    search_queries = _chunked_queries(list(dict.fromkeys(profile_queries + derived_queries)))
     if search_queries:
         try:
             per_query_limit = max(3, min(10, max_items // max(1, len(search_queries))))
@@ -198,7 +201,6 @@ def collect_fxtwitter_opportunities(
                     if not opp:
                         continue
                     if opp.score >= min_score:
-                        store.mark_seen(tweet.thing_id)
                         collected += 1
                         yield opp
         except Exception as exc:
@@ -215,7 +217,6 @@ def collect_fxtwitter_opportunities(
                 if not opp:
                     continue
                 if opp.score >= min_score:
-                    store.mark_seen(tweet.thing_id)
                     collected += 1
                     yield opp
         except Exception as exc:

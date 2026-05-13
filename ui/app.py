@@ -4,9 +4,11 @@ import subprocess
 import sys
 import threading
 import os
+import csv
+from io import StringIO
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 from ui.state import (
     get_opportunity,
@@ -15,6 +17,9 @@ from ui.state import (
     list_opportunities,
     list_playbooks,
     seed_if_empty,
+    analytics as get_analytics,
+    update_feedback,
+    update_outcome,
     update_status,
 )
 
@@ -139,13 +144,18 @@ def dashboard():
     all_opportunities = list_opportunities(platform=platform)
     
     summary = {
-        "pending": len([o for o in all_opportunities if o["status"] == "pending"]),
-        "approved": len([o for o in all_opportunities if o["status"] == "approved"]),
+        "pending": len([o for o in all_opportunities if o["status"] in ("new", "qualified", "drafted", "pending")]),
+        "approved": len([o for o in all_opportunities if o["status"] in ("approved", "posted", "replied_back", "converted")]),
         "rejected": len([o for o in all_opportunities if o["status"] == "rejected"]),
+        "posted": len([o for o in all_opportunities if o["status"] in ("posted", "replied_back", "converted")]),
+        "converted": len([o for o in all_opportunities if o["status"] == "converted"]),
     }
     
     if status and status != "all":
-        opportunities = [o for o in all_opportunities if o["status"] == status]
+        if status == "pending":
+            opportunities = [o for o in all_opportunities if o["status"] in ("new", "qualified", "drafted", "pending")]
+        else:
+            opportunities = [o for o in all_opportunities if o["status"] == status]
     else:
         opportunities = all_opportunities
     return jsonify({
@@ -177,6 +187,55 @@ def reject(opportunity_id: str):
     data = request.get_json() or {}
     note = data.get("note", "").strip() if request.is_json else request.form.get("note", "").strip()
     update_status(opportunity_id, "rejected", "operator", note)
+    return jsonify({"success": True})
+
+
+@app.post("/api/opportunity/<opportunity_id>/status")
+def set_opportunity_status(opportunity_id: str):
+    data = request.get_json() or {}
+    status = str(data.get("status", "")).strip()
+    note = str(data.get("note", "") or "").strip()
+    try:
+        update_status(opportunity_id, status, "operator", note)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"success": True})
+
+
+@app.post("/api/opportunity/<opportunity_id>/outcome")
+def save_opportunity_outcome(opportunity_id: str):
+    data = request.get_json() or {}
+    try:
+        update_outcome(
+            opportunity_id=opportunity_id,
+            actor="operator",
+            posted_reply_url=str(data.get("posted_reply_url", "") or "").strip(),
+            selected_draft_index=data.get("selected_draft_index"),
+            replied_at=str(data.get("replied_at", "") or "").strip() or None,
+            followup_sentiment=str(data.get("followup_sentiment", "") or "").strip(),
+            clicks=int(data.get("clicks", 0) or 0),
+            signups=int(data.get("signups", 0) or 0),
+            conversion_value=float(data.get("conversion_value", 0) or 0),
+            next_follow_up_at=str(data.get("next_follow_up_at", "") or "").strip() or None,
+            operator_notes=str(data.get("operator_notes", "") or "").strip(),
+            status=str(data.get("status", "") or "").strip() or None,
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"success": True})
+
+
+@app.post("/api/opportunity/<opportunity_id>/feedback")
+def save_opportunity_feedback(opportunity_id: str):
+    data = request.get_json() or {}
+    label = str(data.get("label", "") or "").strip()
+    note = str(data.get("note", "") or "").strip()
+    if not label:
+        return jsonify({"error": "label is required"}), 400
+    try:
+        update_feedback(opportunity_id, label, "operator", note)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify({"success": True})
 
 
@@ -223,6 +282,27 @@ def playbooks():
 def audit():
     platform = (request.args.get("platform") or "reddit").strip().lower()
     return jsonify({"logs": list_audit(platform=platform), "platform": platform})
+
+
+@app.get("/api/audit/export")
+def audit_export():
+    platform = (request.args.get("platform") or "reddit").strip().lower()
+    rows = list_audit(platform=platform)
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=["id", "platform", "opportunity_id", "action", "actor", "note", "created_at"])
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(
+        buffer.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=gatekeeper-{platform}-audit.csv"},
+    )
+
+
+@app.get("/api/analytics")
+def analytics():
+    platform = (request.args.get("platform") or "reddit").strip().lower()
+    return jsonify({"analytics": get_analytics(platform=platform), "platform": platform})
 
 
 @app.get("/api/runtime")
@@ -336,4 +416,4 @@ def api_suggest_keywords():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5050)
+    app.run(debug=os.getenv("FLASK_DEBUG", "0").strip() in ("1", "true", "yes"), port=5050)

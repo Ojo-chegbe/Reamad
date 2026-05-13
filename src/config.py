@@ -48,8 +48,22 @@ def load_settings() -> Settings:
         target_subreddits=_csv(os.getenv("TARGET_SUBREDDITS", "")),
         pain_subreddits=profile.get("subreddits", _csv(os.getenv("PAIN_SUBREDDITS", ""))),
         keywords=[k.lower() for k in _csv(os.getenv("KEYWORDS", ""))],
-        reddit_pain_keywords=[k.lower() for k in profile.get("reddit_keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))],
-        twitter_pain_keywords=[k.lower() for k in profile.get("twitter_keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))],
+        reddit_pain_keywords=[
+            k.lower()
+            for k in (
+                profile.get("reddit_keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))
+                + profile.get("buying_signals", [])
+                + profile.get("competitors", [])
+            )
+        ],
+        twitter_pain_keywords=[
+            k.lower()
+            for k in (
+                profile.get("twitter_keywords", _csv(os.getenv("PAIN_KEYWORDS", "")))
+                + profile.get("buying_signals", [])
+                + profile.get("competitors", [])
+            )
+        ],
         reddit_knowledge_block=profile.get("reddit_knowledge_block", ""),
         twitter_knowledge_block=profile.get("twitter_knowledge_block", ""),
         reddit_prompt_template=profile.get("reddit_prompt_template", "").strip(),
@@ -63,8 +77,8 @@ def load_settings() -> Settings:
         google_model=os.getenv("GOOGLE_MODEL", "gemma-3-27b-it").strip(),
         # Twitter / FxTwitter
         twitter_enabled=os.getenv("TWITTER_ENABLED", "0").strip() in ("1", "true", "yes"),
-        twitter_target_handles=_csv(os.getenv("TWITTER_TARGET_HANDLES", "")),
-        twitter_queries=_csv(os.getenv("TWITTER_QUERIES", "")),
+        twitter_target_handles=profile.get("twitter_target_handles", _csv(os.getenv("TWITTER_TARGET_HANDLES", ""))),
+        twitter_queries=profile.get("twitter_queries", _csv(os.getenv("TWITTER_QUERIES", ""))),
         twitter_max_items=int(os.getenv("TWITTER_MAX_ITEMS", "25")),
         twitter_min_score=int(os.getenv("TWITTER_MIN_SCORE", "8")),
         twitter_relevance_min_score=int(os.getenv("TWITTER_RELEVANCE_MIN_SCORE", "25")),
