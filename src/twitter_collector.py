@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import feedparser
 
 from src.models import Opportunity
-from src.scorer import score_post
+from src.scorer import _extract_knowledge_terms, score_post
 from src.store import Store
 from src.twitter_client import TweetPost, TwitterClient
 from src.twitter_relevance import TwitterRelevanceDecision, TwitterRelevanceJudge
@@ -16,30 +16,18 @@ from src.twitter_relevance import TwitterRelevanceDecision, TwitterRelevanceJudg
 
 def _derive_search_queries(prompt_template: str, knowledge_block: str) -> list[str]:
     del prompt_template
-    source = knowledge_block or ""
-
-    # These are buyer-problem searches derived from the knowledge-box capabilities,
-    # not generic keywords like "AI" or "content".
-    query_groups = [
-        ["need product photos", "amazon listing photos", "shopify product photos", "product photo background"],
-        ["repurpose long video into shorts", "youtube shorts from long video", "turn podcast into clips", "make reels from long video"],
-        ["ugc ads for product", "make ugc ads", "need video ads for product", "product demo video"],
-        ["youtube thumbnail tool", "youtube seo tool", "video ideas for youtube", "validate video ideas"],
-        ["voice clone for videos", "ai narration tool", "remove background noise audio", "clean up audio recording"],
-        ["write amazon listing copy", "seo product descriptions", "amazon bullet points", "shopify product descriptions"],
-        ["schedule tiktok instagram posts", "social media scheduler", "post to tiktok and instagram", "content distribution workflow"],
-        ["ai music generator", "generate original music", "make music without instruments", "song ideas generator"],
-        ["standardize product photos", "batch edit product photos", "bulk product editing", "multi product editor"],
-        ["humanize ai text", "make ai text sound natural", "ai text too robotic", "rewrite ai generated text"],
-    ]
-    lower_source = source.lower()
-
+    terms = _extract_knowledge_terms(knowledge_block)
     queries: list[str] = []
-    for group in query_groups:
-        for query in group:
-            words = [w for w in query.split() if len(w) > 3]
-            if any(word in lower_source for word in words):
-                queries.append(query)
+    for term in terms:
+        cleaned = term.strip().lower()
+        if not cleaned or len(cleaned) < 4:
+            continue
+        queries.extend([
+            cleaned,
+            f"need {cleaned}",
+            f"looking for {cleaned}",
+            f"alternative to {cleaned}",
+        ])
 
     unique: list[str] = []
     seen = set()

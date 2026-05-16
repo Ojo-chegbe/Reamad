@@ -48,7 +48,7 @@ def _immutable_context_block(
     return (
         "Community rules context:\n"
         f"{community_rules}\n\n"
-        "Soloa context to use when relevant:\n"
+        "Campaign/product context to use when relevant:\n"
         f"{knowledge_block}\n\n"
         f"Post title: {opportunity.title}\n"
         f"Post body: {(opportunity.body or '')[:2000]}\n"
@@ -71,28 +71,42 @@ def _render_prompt(
         "- No extra headers or notes."
     )
 
-    if platform == "twitter":
-        base = (settings.twitter_prompt_template or "").strip()
-        knowledge_block = (settings.twitter_knowledge_block or "").strip()
+    if platform in ("twitter", "youtube"):
+        if platform == "youtube":
+            base = (settings.youtube_prompt_template or "").strip()
+            knowledge_block = (settings.youtube_knowledge_block or "").strip()
+            content_label = "YouTube comment context"
+            posture = (
+                "YouTube-specific reply posture:\n"
+                "- YouTube comments are public and spam-sensitive; be helpful before any product mention.\n"
+                "- If the comment is a clear fit for the configured business, exactly 1 of the 3 drafts may mention the business or a specific capability naturally.\n"
+                "- Reply to the commenter, not just the video title.\n"
+                "- Keep it concise enough to work as a real YouTube comment reply.\n"
+                "- Do not use hard CTAs like buy now, sign up, or DM me."
+            )
+        else:
+            base = (settings.twitter_prompt_template or "").strip()
+            knowledge_block = (settings.twitter_knowledge_block or "").strip()
+            content_label = "Tweet text context"
+            posture = (
+                "Twitter-specific marketing posture:\n"
+                "- Twitter/X is more tolerant of direct product mentions than Reddit.\n"
+                "- If the tweet is a clear fit for the configured business, at least 2 of the 3 drafts should mention the business or a specific capability naturally.\n"
+                "- The reply can be a marketing reply, not only a problem-solving answer, but it must still feel like a normal human in-thread response.\n"
+                "- Match the exact opportunity to a specific capability in the configured campaign knowledge.\n"
+                "- Do not use hard CTAs like buy now, sign up, or DM me."
+            )
         if not base:
             raise DraftGenerationError(f"empty prompt template for platform={platform}")
         if not knowledge_block:
             raise DraftGenerationError(f"empty knowledge block for platform={platform}")
-        tweet_context = (
-            f"Tweet text context:\n"
+        social_context = (
+            f"{content_label}:\n"
             f"Title: {opportunity.title}\n"
             f"Body: {(opportunity.body or '')[:2000]}\n"
             f"Age in minutes: {opportunity.age_minutes}"
         )
-        twitter_marketing_context = (
-            "Twitter-specific marketing posture:\n"
-            "- Twitter/X is more tolerant of direct product mentions than Reddit.\n"
-            "- If the tweet is a clear fit for SoloaAI, at least 2 of the 3 drafts should mention SoloaAI or a specific SoloaAI capability naturally.\n"
-            "- The reply can be a marketing reply, not only a problem-solving answer, but it must still feel like a normal human in-thread response.\n"
-            "- Match the exact opportunity: creator content, ecommerce assets, product photos, UGC ads, Shorts repurposing, YouTube growth, music, voice, audio, scheduling, or AI text cleanup.\n"
-            "- Do not use hard CTAs like buy now, sign up, or DM me."
-        )
-        return f"{base}\n\n{twitter_marketing_context}\n\n{knowledge_block}\n\n{tweet_context}\n\n{output_contract}".strip()
+        return f"{base}\n\n{posture}\n\n{knowledge_block}\n\n{social_context}\n\n{output_contract}".strip()
     else:
         template = settings.reddit_prompt_template
         knowledge_block = settings.reddit_knowledge_block

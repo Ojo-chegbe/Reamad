@@ -1,9 +1,10 @@
-# Soloa Reddit Assistant (JSON endpoints)
+# The Gatekeeper Social Listening Assistant
 
 Compliance-first assistant that:
 - Monitors selected subreddits for relevant discussions
+- Searches X/Twitter and YouTube when enabled
 - Pulls subreddit rules and community context
-- Scores post fit for engagement
+- Qualifies content against each account's campaign knowledge
 - Generates suggested comment drafts for manual approval
 
 ## 1) Setup
@@ -17,15 +18,16 @@ copy .env.example .env
 
 Fill `.env` values:
 - `REDDIT_USER_AGENT` (required, unique, descriptive)
-- `TARGET_SUBREDDITS` (comma-separated, optional if `PAIN_SUBREDDITS` is set)
-- `KEYWORDS` (comma-separated, optional if `PAIN_KEYWORDS` is set)
+- `GOOGLE_API_KEY` and `GOOGLE_MODEL` for stronger draft quality (default: `gemma-3-27b-it`)
 
 Optional:
-- `GOOGLE_API_KEY` and `GOOGLE_MODEL` for stronger draft quality (default: `gemma-3-27b-it`)
-- `PAIN_SUBREDDITS` for pain-heavy communities (creator, marketing, productivity, indie)
-- `PAIN_KEYWORDS` for frustration signals (for example "this is taking too long")
 - `EARLY_REPLY_WINDOW_MINUTES` for freshness scoring boost (default: `90`)
 - `TWITTER_RELEVANCE_MIN_SCORE` for X/Twitter semantic filtering (default: `25`)
+- `YOUTUBE_API_KEY` and `YOUTUBE_ENABLED=1` to enable YouTube comment discovery
+- `YOUTUBE_MAX_SEARCH_QUERIES`, `YOUTUBE_MAX_VIDEOS`, and `YOUTUBE_MAX_COMMENTS_PER_VIDEO` to control YouTube Data API quota usage
+
+Audience targeting is configured per account in the review UI, not in `.env`.
+Use Configuration -> Bot Profile to edit target subreddits, Reddit discovery signals, Twitter handles, Twitter queries, YouTube channels, YouTube queries, knowledge blocks, and prompt templates for the active account.
 
 ## 2) Run
 
@@ -58,4 +60,4 @@ Then open `http://127.0.0.1:5050`.
 - No OAuth API keys required for read-only monitoring
 - Stores lightweight state in SQLite (`bot_state.db`)
 - Deletes are handled by refreshing source data each cycle; do not build long-term retention of deleted content
-- Draft generation includes a Soloa knowledge profile and defaults to solve-first, subtle-mention behavior
+- Draft generation uses the active account's campaign knowledge and defaults to solve-first, subtle-mention behavior

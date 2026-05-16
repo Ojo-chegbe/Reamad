@@ -1,2 +1,1 @@
-"""Soloa Reddit assistant package."""
-
+"""Social listening and reply assistant package."""

@@ -6,24 +6,30 @@ import {
   ArrowUpRight,
   BarChart3,
   Book,
+  Building2,
   Check,
   CheckSquare,
+  ChevronDown,
   Clipboard,
   Clock,
   ExternalLink,
-  HelpCircle,
+  Eye,
+  EyeOff,
   LayoutDashboard,
   LogOut,
   MessageCircle,
   MessageSquareDiff,
   MoreVertical,
+  Plus,
   Play,
   Settings,
   Sparkles,
   Square,
   Target,
   TrendingUp,
+  User,
   X,
+  Zap,
 } from "lucide-react";
 import {
   Area,
@@ -107,16 +113,22 @@ interface BotProfile {
   disclosure_policy: string;
   reddit_knowledge_block: string;
   twitter_knowledge_block: string;
+  youtube_knowledge_block: string;
   reddit_prompt_template: string;
   twitter_prompt_template: string;
+  youtube_prompt_template: string;
   twitter_target_handles: string[];
   twitter_queries: string[];
+  youtube_target_channels: string[];
+  youtube_queries: string[];
+  youtube_keywords: string[];
 }
 
 interface EngineRuntimeStatus {
   running: boolean;
   pid: number | null;
   last_returncode: number | null;
+  account_id?: string | null;
 }
 
 interface RuntimeStatusPayload {
@@ -124,7 +136,26 @@ interface RuntimeStatusPayload {
   engines?: {
     reddit?: EngineRuntimeStatus;
     twitter?: EngineRuntimeStatus;
+    youtube?: EngineRuntimeStatus;
   };
+}
+
+interface Account {
+  id: string;
+  name: string;
+  role: string;
+}
+
+interface AuthUser {
+  id: string;
+  email: string;
+  display_name?: string;
+  current_account_id: string;
+}
+
+interface AuthContext {
+  user: AuthUser;
+  accounts: Account[];
 }
 
 interface Analytics {
@@ -146,7 +177,7 @@ interface Analytics {
 
 type AuditActionFilter = "all" | "approved" | "rejected" | "posted" | "converted";
 type ConfigTab = "profile" | "playbooks";
-type Platform = "reddit" | "twitter";
+type Platform = "reddit" | "twitter" | "youtube";
 type View = "dashboard" | "triage" | "approvals" | "config";
 
 const STAGES = ["new", "qualified", "drafted", "approved", "posted", "replied_back", "converted", "lost", "rejected"];
@@ -183,6 +214,36 @@ function formatCompact(value: number) {
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value || 0);
 }
 
+function platformLabel(platform: Platform) {
+  if (platform === "reddit") return "Reddit";
+  if (platform === "twitter") return "Twitter";
+  return "YouTube";
+}
+
+function platformTargetLabel(platform: Platform) {
+  if (platform === "reddit") return "Target Subreddits";
+  if (platform === "twitter") return "Target Twitter Handles";
+  return "Target YouTube Channels";
+}
+
+function platformTargetDescription(platform: Platform) {
+  if (platform === "reddit") return "Communities monitored for buying signals.";
+  if (platform === "twitter") return "Accounts monitored for relevant posts.";
+  return "Channels used to constrain YouTube discovery when configured.";
+}
+
+function platformTargetPrefix(platform: Platform) {
+  if (platform === "reddit") return "r/";
+  if (platform === "twitter") return "@";
+  return "@";
+}
+
+function platformMention(platform: Platform, value: string) {
+  if (platform === "reddit") return `r/${value}`;
+  if (platform === "twitter") return `@${value}`;
+  return value.startsWith("@") ? value : `@${value}`;
+}
+
 export default function Gatekeeper() {
   const [currentView, setCurrentView] = useState<View>("triage");
   const [platform, setPlatform] = useState<Platform>("reddit");
@@ -217,14 +278,36 @@ export default function Gatekeeper() {
     engines: {
       reddit: { running: false, pid: null, last_returncode: null },
       twitter: { running: false, pid: null, last_returncode: null },
+      youtube: { running: false, pid: null, last_returncode: null },
     },
   });
   const [subredditInput, setSubredditInput] = useState("");
   const [twitterHandleInput, setTwitterHandleInput] = useState("");
   const [twitterQueryInput, setTwitterQueryInput] = useState("");
+  const [youtubeChannelInput, setYoutubeChannelInput] = useState("");
+  const [youtubeQueryInput, setYoutubeQueryInput] = useState("");
   const [subredditSuggestions, setSubredditSuggestions] = useState<string[]>([]);
   const [suggestingKeywords, setSuggestingKeywords] = useState(false);
   const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([]);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [auth, setAuth] = useState<AuthContext | null>(null);
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [authEmail, setAuthEmail] = useState("admin@soloa.local");
+  const [authPassword, setAuthPassword] = useState("soloa-admin");
+  const [authPasswordVisible, setAuthPasswordVisible] = useState(false);
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [authAccountName, setAuthAccountName] = useState("New campaign");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [newAccountName, setNewAccountName] = useState("");
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const [enginePanelOpen, setEnginePanelOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  const activeAccount = useMemo(
+    () => auth?.accounts.find((account) => account.id === auth.user.current_account_id) || auth?.accounts[0] || null,
+    [auth],
+  );
 
   const activeOpp = useMemo(
     () => opportunities.find((opp) => opp.id === selectedOppId) || null,
@@ -232,6 +315,99 @@ export default function Gatekeeper() {
   );
 
   const activeDraft = activeOpp?.drafts?.[selectedDraftIndex] || activeOpp?.drafts?.[0] || "";
+
+  const refreshAuth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me");
+      if (!res.ok) {
+        setAuth(null);
+        return;
+      }
+      const data = await res.json();
+      setAuth({ user: data.user, accounts: data.accounts || [] });
+    } catch (err) {
+      console.error(err);
+      setAuth(null);
+    } finally {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshAuth();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshAuth]);
+
+  const submitAuth = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const endpoint = authMode === "login" ? "/api/auth/login" : "/api/auth/signup";
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: authEmail,
+          password: authPassword,
+          display_name: authDisplayName,
+          account_name: authAccountName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Authentication failed");
+      setAuth({ user: data.user, accounts: data.accounts || [] });
+      setCurrentView("triage");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Authentication failed");
+    } finally {
+      setAuthLoading(false);
+      setAuthChecked(true);
+    }
+  };
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setAuth(null);
+    setOpportunities([]);
+    setProfile(null);
+  };
+
+  const switchAccount = async (accountId: string) => {
+    if (!accountId || accountId === auth?.user.current_account_id) return;
+    const res = await fetch("/api/accounts/current", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_id: accountId }),
+    });
+    const data = await res.json();
+    if (!res.ok) return;
+    setAuth({ user: data.user, accounts: data.accounts || [] });
+    setSelectedOppId(null);
+    setProfile(null);
+  };
+
+  const createBusinessAccount = async () => {
+    if (!newAccountName.trim()) return;
+    setCreatingAccount(true);
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newAccountName.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAuth({ user: data.user, accounts: data.accounts || [] });
+        setNewAccountName("");
+        setSelectedOppId(null);
+      }
+    } finally {
+      setCreatingAccount(false);
+    }
+  };
 
   const fetchOpportunities = useCallback(async () => {
     setLoading(true);
@@ -318,6 +494,7 @@ export default function Gatekeeper() {
   }, []);
 
   useEffect(() => {
+    if (!auth) return;
     const timer = window.setTimeout(() => {
       if (currentView === "triage") {
         void fetchOpportunities();
@@ -331,17 +508,32 @@ export default function Gatekeeper() {
       if (currentView === "approvals") void fetchAuditLogs();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [currentView, fetchAnalytics, fetchAuditLogs, fetchOpportunities, fetchPlaybooks, fetchProfile, fetchRuntimeStatus]);
+  }, [auth, currentView, fetchAnalytics, fetchAuditLogs, fetchOpportunities, fetchPlaybooks, fetchProfile, fetchRuntimeStatus]);
 
   useEffect(() => {
-    if (currentView !== "triage") return;
+    if (!auth || currentView !== "triage") return;
     const runtimeTimer = window.setInterval(fetchRuntimeStatus, 5000);
     const dataTimer = botRunning ? window.setInterval(fetchOpportunities, 10000) : null;
     return () => {
       window.clearInterval(runtimeTimer);
       if (dataTimer) window.clearInterval(dataTimer);
     };
-  }, [botRunning, currentView, fetchOpportunities, fetchRuntimeStatus]);
+  }, [auth, botRunning, currentView, fetchOpportunities, fetchRuntimeStatus]);
+
+  // Close dropdown panels on outside click
+  useEffect(() => {
+    const handler = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (enginePanelOpen && !target.closest(".engine-trigger-wrapper")) {
+        setEnginePanelOpen(false);
+      }
+      if (userMenuOpen && !target.closest(".user-trigger-wrapper")) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [enginePanelOpen, userMenuOpen]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -431,7 +623,7 @@ export default function Gatekeeper() {
     }
   };
 
-  const toggleEngine = async (engine: "reddit" | "twitter") => {
+  const toggleEngine = async (engine: Platform) => {
     setEngineLoading(engine);
     setRuntimeMessage("");
     try {
@@ -577,12 +769,50 @@ export default function Gatekeeper() {
           ? "Track replies and schedule follow-ups."
           : "Keep feeding the pipeline with qualified mentions.";
 
+  if (!authChecked) {
+    return <div className="auth-shell"><div className="auth-card"><div className="auth-title">Loading workspace</div></div></div>;
+  }
+
+  if (!auth) {
+    return (
+      <AuthScreen
+        mode={authMode}
+        email={authEmail}
+        password={authPassword}
+        displayName={authDisplayName}
+        accountName={authAccountName}
+        error={authError}
+        loading={authLoading}
+        passwordVisible={authPasswordVisible}
+        onModeChange={(mode) => {
+          setAuthMode(mode);
+          setAuthError("");
+          if (mode === "login") {
+            setAuthEmail("admin@soloa.local");
+            setAuthPassword("soloa-admin");
+            setAuthAccountName("Default workspace");
+          } else {
+            setAuthEmail("");
+            setAuthPassword("");
+            setAuthAccountName("");
+          }
+        }}
+        onEmailChange={setAuthEmail}
+        onPasswordChange={setAuthPassword}
+        onPasswordVisibleChange={setAuthPasswordVisible}
+        onDisplayNameChange={setAuthDisplayName}
+        onAccountNameChange={setAuthAccountName}
+        onSubmit={submitAuth}
+      />
+    );
+  }
+
   return (
     <div className="app-container">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <div className="sidebar-title">SOLOA AI</div>
-          <div className="sidebar-subtitle">{platform === "reddit" ? "REDDIT ENGINE" : "TWITTER ENGINE"}</div>
+          <div className="sidebar-title">{activeAccount?.name || "Workspace"}</div>
+          <div className="sidebar-subtitle">{platformLabel(platform).toUpperCase()} ENGINE</div>
         </div>
 
         <nav className="sidebar-nav">
@@ -604,44 +834,148 @@ export default function Gatekeeper() {
           <button className="nav-item" onClick={() => window.open("/api/audit/export?platform=" + platform, "_blank")}>
             <Book className="nav-icon" /> EXPORT AUDIT
           </button>
-          <button className="nav-item" title="Authentication is the next gated implementation step.">
-            <LogOut className="nav-icon" /> LOGIN COMING
+          <button className="nav-item" onClick={logout}>
+            <LogOut className="nav-icon" /> LOG OUT
           </button>
         </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
-          <div className="page-title">
-            The Gatekeeper <span className="page-version">v3.0-growth</span>
+          {/* ── Left: contextual page title ── */}
+          <div className="topbar-left">
+            <h1 className="topbar-title">
+              {currentView === "dashboard" && "Dashboard"}
+              {currentView === "triage" && "Mentions & Pipeline"}
+              {currentView === "approvals" && "Audit Trail"}
+              {currentView === "config" && "Configuration"}
+            </h1>
+            <span className="topbar-breadcrumb">{platformLabel(platform)}</span>
           </div>
-          <div className="topbar-actions">
-            <div className="filters">
-              <button className={`filter-btn ${platform === "reddit" ? "active" : ""}`} onClick={() => setPlatform("reddit")}>REDDIT</button>
-              <button className={`filter-btn ${platform === "twitter" ? "active" : ""}`} onClick={() => setPlatform("twitter")}>TWITTER</button>
-            </div>
-            <div className="bot-controls">
-              <div className="bot-state">
-                <div className={`status-dot ${botRunning ? "running" : "stopped"}`} />
-                {botRunning ? "BOT: RUNNING" : "BOT: STOPPED"}
-              </div>
-              <button className={`btn-start-bot ${botRunning ? "active" : ""}`} onClick={toggleRuntime} disabled={runtimeLoading}>
-                {runtimeLoading ? "WAIT..." : botRunning ? <><Square size={14} fill="currentColor" /> STOP ALL</> : <><Play size={14} fill="currentColor" /> START ALL</>}
+
+          {/* ── Center: platform segmented control ── */}
+          <div className="platform-switcher">
+            {(["reddit", "twitter", "youtube"] as const).map((p) => (
+              <button
+                key={p}
+                className={`platform-seg ${platform === p ? "active" : ""}`}
+                onClick={() => setPlatform(p)}
+              >
+                <span className={`platform-dot ${p === platform && runtimeStatus.engines?.[p]?.running ? "live" : ""}`} />
+                {platformLabel(p)}
               </button>
-              {(["reddit", "twitter"] as const).map((engine) => (
-                <button
-                  key={engine}
-                  className={`btn-start-bot ${runtimeStatus.engines?.[engine]?.running ? "active" : ""}`}
-                  onClick={() => toggleEngine(engine)}
-                  disabled={runtimeLoading || engineLoading !== null}
-                >
-                  {engineLoading === engine ? "WAIT..." : runtimeStatus.engines?.[engine]?.running ? <><Square size={14} fill="currentColor" /> STOP {engine.toUpperCase()}</> : <><Play size={14} fill="currentColor" /> START {engine.toUpperCase()}</>}
-                </button>
-              ))}
+            ))}
+          </div>
+
+          {/* ── Right: engine status + user ── */}
+          <div className="topbar-right">
+            {/* Engine control */}
+            <div className="engine-trigger-wrapper">
+              <button
+                className={`engine-trigger ${botRunning ? "live" : ""}`}
+                onClick={() => setEnginePanelOpen((prev) => !prev)}
+              >
+                <Zap size={14} />
+                <span>{botRunning ? "Engines running" : "Engines off"}</span>
+                <ChevronDown size={14} className={`engine-chevron ${enginePanelOpen ? "open" : ""}`} />
+              </button>
+
+              {enginePanelOpen && (
+                <div className="engine-panel">
+                  <div className="engine-panel-header">
+                    <span className="engine-panel-title">Engine Control</span>
+                    <button
+                      className={`engine-master-btn ${botRunning ? "stop" : "start"}`}
+                      onClick={() => { void toggleRuntime(); }}
+                      disabled={runtimeLoading}
+                    >
+                      {runtimeLoading ? "..." : botRunning ? "Stop all" : "Start all"}
+                    </button>
+                  </div>
+                  <div className="engine-panel-list">
+                    {(["reddit", "twitter", "youtube"] as const).map((engine) => {
+                      const isOn = Boolean(runtimeStatus.engines?.[engine]?.running);
+                      return (
+                        <div key={engine} className="engine-row">
+                          <div className="engine-row-info">
+                            <span className={`engine-row-dot ${isOn ? "on" : ""}`} />
+                            <span className="engine-row-name">{platformLabel(engine)}</span>
+                          </div>
+                          <button
+                            className={`engine-row-btn ${isOn ? "stop" : "start"}`}
+                            onClick={() => void toggleEngine(engine)}
+                            disabled={runtimeLoading || engineLoading !== null}
+                          >
+                            {engineLoading === engine
+                              ? "..."
+                              : isOn
+                                ? <><Square size={10} fill="currentColor" /> Stop</>
+                                : <><Play size={10} fill="currentColor" /> Start</>
+                            }
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {runtimeMessage && <div className="engine-panel-msg">{runtimeMessage}</div>}
+                </div>
+              )}
             </div>
-            {runtimeMessage ? <div className="profile-message" style={{ marginLeft: "0.75rem", maxWidth: "360px" }}>{runtimeMessage}</div> : null}
-            <HelpCircle className="topbar-icon" />
-            <div className="user-avatar" />
+
+            <div className="topbar-divider" />
+
+            {/* User / account area */}
+            <div className="user-trigger-wrapper">
+              <button className="user-trigger" onClick={() => setUserMenuOpen((prev) => !prev)}>
+                <div className="user-avatar-ring">
+                  <User size={14} />
+                </div>
+                <div className="user-trigger-text">
+                  <span className="user-trigger-name">{auth.user.display_name || auth.user.email.split("@")[0]}</span>
+                  <span className="user-trigger-account">{activeAccount?.name || "—"}</span>
+                </div>
+                <ChevronDown size={14} className={`user-chevron ${userMenuOpen ? "open" : ""}`} />
+              </button>
+
+              {userMenuOpen && (
+                <div className="user-panel">
+                  <div className="user-panel-section">
+                    <span className="user-panel-label">Workspace</span>
+                    {auth.accounts.map((account) => (
+                      <button
+                        key={account.id}
+                        className={`user-panel-item ${account.id === auth.user.current_account_id ? "active" : ""}`}
+                        onClick={() => { void switchAccount(account.id); setUserMenuOpen(false); }}
+                      >
+                        <Building2 size={14} />
+                        {account.name}
+                        {account.id === auth.user.current_account_id && <Check size={14} className="user-panel-check" />}
+                      </button>
+                    ))}
+                    <div className="user-panel-create">
+                      <input
+                        className="user-panel-create-input"
+                        placeholder="New workspace name..."
+                        value={newAccountName}
+                        onChange={(event) => setNewAccountName(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === "Enter") { void createBusinessAccount(); setUserMenuOpen(false); } }}
+                      />
+                      <button
+                        className="user-panel-create-btn"
+                        onClick={() => { void createBusinessAccount(); setUserMenuOpen(false); }}
+                        disabled={creatingAccount || !newAccountName.trim()}
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="user-panel-divider" />
+                  <button className="user-panel-item danger" onClick={() => { void logout(); setUserMenuOpen(false); }}>
+                    <LogOut size={14} /> Log out
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -650,7 +984,7 @@ export default function Gatekeeper() {
             <section className="growth-hero">
               <div>
                 <div className="dashboard-eyebrow">Growth Overview</div>
-                <h2 className="growth-title">{platform === "reddit" ? "Reddit" : "Twitter"} performance</h2>
+                <h2 className="growth-title">{platformLabel(platform)} performance</h2>
                 <p className="growth-subtitle">Pipeline health, replies, conversions, and the channels producing results.</p>
               </div>
               <div className="growth-hero-actions">
@@ -780,7 +1114,7 @@ export default function Gatekeeper() {
                   opportunities.map((opp) => (
                     <button key={opp.id} className={`list-item ${selectedOppId === opp.id ? "active" : ""}`} onClick={() => setSelectedOppId(opp.id)}>
                       <div className="list-item-header">
-                        <span className="list-item-meta">{platform === "reddit" ? `r/${opp.subreddit}` : `@${opp.subreddit}`}</span>
+                        <span className="list-item-meta">{platformMention(platform, opp.subreddit)}</span>
                         <span className={`card-pill ${opp.status === "rejected" ? "rejected" : opp.status === "approved" || opp.status === "posted" || opp.status === "converted" ? "approved" : "triage"}`}>
                           {displayStage(opp.status)}
                         </span>
@@ -799,7 +1133,7 @@ export default function Gatekeeper() {
                   <>
                     <div className="detail-scroll-area">
                       <div className="detail-header-meta">
-                        <span className="detail-subreddit">{platform === "reddit" ? `r/${activeOpp.subreddit}` : `@${activeOpp.subreddit}`}</span>
+                        <span className="detail-subreddit">{platformMention(platform, activeOpp.subreddit)}</span>
                         <span className="detail-score">Score: {activeOpp.score}</span>
                         <span className="detail-score">Stage: {displayStage(activeOpp.status)}</span>
                         <a href={activeOpp.url} target="_blank" rel="noopener noreferrer" className="detail-link">
@@ -967,27 +1301,30 @@ export default function Gatekeeper() {
                     </div>
 
                     <TagEditor
-                      title={platform === "reddit" ? "Target Subreddits" : "Target Twitter Handles"}
-                      description={platform === "reddit" ? "Communities monitored for buying signals." : "Accounts monitored for relevant posts."}
-                      tags={platform === "reddit" ? profile.subreddits : profile.twitter_target_handles}
+                      title={platformTargetLabel(platform)}
+                      description={platformTargetDescription(platform)}
+                      tags={platform === "reddit" ? profile.subreddits : platform === "twitter" ? profile.twitter_target_handles : profile.youtube_target_channels}
                       disabled={!configEditing}
-                      prefix={platform === "reddit" ? "r/" : "@"}
-                      inputValue={platform === "reddit" ? subredditInput : twitterHandleInput}
-                      placeholder={platform === "reddit" ? "Search subreddit..." : "Add handle and press Enter..."}
-                      onInputChange={platform === "reddit" ? setSubredditInput : setTwitterHandleInput}
+                      prefix={platformTargetPrefix(platform)}
+                      inputValue={platform === "reddit" ? subredditInput : platform === "twitter" ? twitterHandleInput : youtubeChannelInput}
+                      placeholder={platform === "reddit" ? "Search subreddit..." : platform === "twitter" ? "Add handle and press Enter..." : "Add channel name or ID and press Enter..."}
+                      onInputChange={platform === "reddit" ? setSubredditInput : platform === "twitter" ? setTwitterHandleInput : setYoutubeChannelInput}
                       suggestions={platform === "reddit" ? subredditSuggestions : []}
                       onAdd={(value) => {
                         const normalized = platform === "reddit" ? value.trim() : value.trim().replace(/^@+/, "").toLowerCase();
                         if (!normalized) return;
                         if (platform === "reddit" && !profile.subreddits.includes(normalized)) setProfile({ ...profile, subreddits: [...profile.subreddits, normalized] });
                         if (platform === "twitter" && !profile.twitter_target_handles.includes(normalized)) setProfile({ ...profile, twitter_target_handles: [...profile.twitter_target_handles, normalized] });
+                        if (platform === "youtube" && !profile.youtube_target_channels.includes(normalized)) setProfile({ ...profile, youtube_target_channels: [...profile.youtube_target_channels, normalized] });
                         setSubredditInput("");
                         setTwitterHandleInput("");
+                        setYoutubeChannelInput("");
                         setSubredditSuggestions([]);
                       }}
                       onRemove={(index) => {
                         if (platform === "reddit") setProfile({ ...profile, subreddits: profile.subreddits.filter((_, idx) => idx !== index) });
-                        else setProfile({ ...profile, twitter_target_handles: profile.twitter_target_handles.filter((_, idx) => idx !== index) });
+                        else if (platform === "twitter") setProfile({ ...profile, twitter_target_handles: profile.twitter_target_handles.filter((_, idx) => idx !== index) });
+                        else setProfile({ ...profile, youtube_target_channels: profile.youtube_target_channels.filter((_, idx) => idx !== index) });
                       }}
                     />
 
@@ -1021,21 +1358,26 @@ export default function Gatekeeper() {
                       onRemove={(index) => setProfile({ ...profile, buying_signals: profile.buying_signals.filter((_, idx) => idx !== index) })}
                     />
 
-                    {platform === "twitter" && (
+                    {platform !== "reddit" && (
                       <TagEditor
-                        title="Twitter Buying-Signal Queries"
+                        title={platform === "twitter" ? "Twitter Buying-Signal Queries" : "YouTube Search Queries"}
                         description="Configured queries now feed the active collector."
-                        tags={profile.twitter_queries}
+                        tags={platform === "twitter" ? profile.twitter_queries : profile.youtube_queries}
                         disabled={!configEditing}
-                        inputValue={twitterQueryInput}
+                        inputValue={platform === "twitter" ? twitterQueryInput : youtubeQueryInput}
                         placeholder="Add query and press Enter..."
-                        onInputChange={setTwitterQueryInput}
+                        onInputChange={platform === "twitter" ? setTwitterQueryInput : setYoutubeQueryInput}
                         onAdd={(value) => {
                           const normalized = value.trim().toLowerCase();
-                          if (normalized && !profile.twitter_queries.includes(normalized)) setProfile({ ...profile, twitter_queries: [...profile.twitter_queries, normalized] });
-                          setTwitterQueryInput("");
+                          if (platform === "twitter" && normalized && !profile.twitter_queries.includes(normalized)) setProfile({ ...profile, twitter_queries: [...profile.twitter_queries, normalized] });
+                          if (platform === "youtube" && normalized && !profile.youtube_queries.includes(normalized)) setProfile({ ...profile, youtube_queries: [...profile.youtube_queries, normalized] });
+                          if (platform === "twitter") setTwitterQueryInput("");
+                          else setYoutubeQueryInput("");
                         }}
-                        onRemove={(index) => setProfile({ ...profile, twitter_queries: profile.twitter_queries.filter((_, idx) => idx !== index) })}
+                        onRemove={(index) => {
+                          if (platform === "twitter") setProfile({ ...profile, twitter_queries: profile.twitter_queries.filter((_, idx) => idx !== index) });
+                          else setProfile({ ...profile, youtube_queries: profile.youtube_queries.filter((_, idx) => idx !== index) });
+                        }}
                       />
                     )}
 
@@ -1055,12 +1397,12 @@ export default function Gatekeeper() {
                     />
 
                     <TagEditor
-                      title="Pain Keywords"
-                      description="Phrases that signal frustration, search intent, or readiness to switch."
-                      tags={platform === "reddit" ? profile.reddit_keywords : profile.twitter_keywords}
+                      title={platform === "reddit" ? "Reddit Discovery Signals" : "Pain Keywords"}
+                      description={platform === "reddit" ? "Used only to prefilter posts before AI relevance review." : "Phrases that signal frustration, search intent, or readiness to switch."}
+                      tags={platform === "reddit" ? profile.reddit_keywords : platform === "twitter" ? profile.twitter_keywords : profile.youtube_keywords}
                       disabled={!configEditing}
                       inputValue=""
-                      placeholder="Add keyword and press Enter..."
+                      placeholder={platform === "reddit" ? "Add discovery signal and press Enter..." : "Add keyword and press Enter..."}
                       suggestions={keywordSuggestions}
                       onInputChange={() => undefined}
                       onAdd={(value) => {
@@ -1068,32 +1410,42 @@ export default function Gatekeeper() {
                         if (!normalized) return;
                         if (platform === "reddit" && !profile.reddit_keywords.includes(normalized)) setProfile({ ...profile, reddit_keywords: [...profile.reddit_keywords, normalized] });
                         if (platform === "twitter" && !profile.twitter_keywords.includes(normalized)) setProfile({ ...profile, twitter_keywords: [...profile.twitter_keywords, normalized] });
+                        if (platform === "youtube" && !profile.youtube_keywords.includes(normalized)) setProfile({ ...profile, youtube_keywords: [...profile.youtube_keywords, normalized] });
                         setKeywordSuggestions(keywordSuggestions.filter((item) => item !== normalized));
                       }}
                       onRemove={(index) => {
                         if (platform === "reddit") setProfile({ ...profile, reddit_keywords: profile.reddit_keywords.filter((_, idx) => idx !== index) });
-                        else setProfile({ ...profile, twitter_keywords: profile.twitter_keywords.filter((_, idx) => idx !== index) });
+                        else if (platform === "twitter") setProfile({ ...profile, twitter_keywords: profile.twitter_keywords.filter((_, idx) => idx !== index) });
+                        else setProfile({ ...profile, youtube_keywords: profile.youtube_keywords.filter((_, idx) => idx !== index) });
                       }}
                     />
                     <button className="btn btn-open" style={{ alignSelf: "flex-start" }} onClick={generateKeywords} disabled={!configEditing || suggestingKeywords}>
-                      {suggestingKeywords ? "ANALYZING..." : "AI SUGGEST KEYWORDS"}
+                      {suggestingKeywords ? "ANALYZING..." : platform === "reddit" ? "AI SUGGEST SIGNALS" : "AI SUGGEST KEYWORDS"}
                     </button>
                   </div>
 
                   <div className="profile-column" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
                     <TextEditor
-                      title={platform === "reddit" ? "Reddit Knowledge Block" : "Twitter Knowledge Block"}
+                      title={platform === "reddit" ? "Reddit Knowledge Block" : platform === "twitter" ? "Twitter Knowledge Block" : "YouTube Knowledge Block"}
                       filename="campaign_knowledge.md"
-                      value={platform === "reddit" ? profile.reddit_knowledge_block : profile.twitter_knowledge_block}
+                      value={platform === "reddit" ? profile.reddit_knowledge_block : platform === "twitter" ? profile.twitter_knowledge_block : profile.youtube_knowledge_block}
                       disabled={!configEditing}
-                      onChange={(value) => platform === "reddit" ? setProfile({ ...profile, reddit_knowledge_block: value }) : setProfile({ ...profile, twitter_knowledge_block: value })}
+                      onChange={(value) => {
+                        if (platform === "reddit") setProfile({ ...profile, reddit_knowledge_block: value });
+                        else if (platform === "twitter") setProfile({ ...profile, twitter_knowledge_block: value });
+                        else setProfile({ ...profile, youtube_knowledge_block: value });
+                      }}
                     />
                     <TextEditor
-                      title={platform === "reddit" ? "Reddit Prompt Template" : "Twitter Prompt Template"}
-                      filename={platform === "reddit" ? "reddit_prompt.txt" : "twitter_prompt.txt"}
-                      value={platform === "reddit" ? profile.reddit_prompt_template : profile.twitter_prompt_template}
+                      title={platform === "reddit" ? "Reddit Prompt Template" : platform === "twitter" ? "Twitter Prompt Template" : "YouTube Prompt Template"}
+                      filename={platform === "reddit" ? "reddit_prompt.txt" : platform === "twitter" ? "twitter_prompt.txt" : "youtube_prompt.txt"}
+                      value={platform === "reddit" ? profile.reddit_prompt_template : platform === "twitter" ? profile.twitter_prompt_template : profile.youtube_prompt_template}
                       disabled={!configEditing}
-                      onChange={(value) => platform === "reddit" ? setProfile({ ...profile, reddit_prompt_template: value }) : setProfile({ ...profile, twitter_prompt_template: value })}
+                      onChange={(value) => {
+                        if (platform === "reddit") setProfile({ ...profile, reddit_prompt_template: value });
+                        else if (platform === "twitter") setProfile({ ...profile, twitter_prompt_template: value });
+                        else setProfile({ ...profile, youtube_prompt_template: value });
+                      }}
                     />
                   </div>
                 </div>
@@ -1111,6 +1463,7 @@ export default function Gatekeeper() {
             )}
 
             {configTab === "playbooks" && platform === "twitter" && <div className="empty-state">Twitter compliance playbooks are not configured yet.</div>}
+            {configTab === "playbooks" && platform === "youtube" && <div className="empty-state">YouTube compliance playbooks are not configured yet.</div>}
             {configTab === "playbooks" && platform === "reddit" && (
               <div className="triage-layout" style={{ height: "calc(100vh - 120px)" }}>
                 <div className="inbox-list">
@@ -1142,6 +1495,93 @@ export default function Gatekeeper() {
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+function AuthScreen({
+  mode,
+  email,
+  password,
+  displayName,
+  accountName,
+  error,
+  loading,
+  passwordVisible,
+  onModeChange,
+  onEmailChange,
+  onPasswordChange,
+  onPasswordVisibleChange,
+  onDisplayNameChange,
+  onAccountNameChange,
+  onSubmit,
+}: {
+  mode: "login" | "signup";
+  email: string;
+  password: string;
+  displayName: string;
+  accountName: string;
+  error: string;
+  loading: boolean;
+  passwordVisible: boolean;
+  onModeChange: (mode: "login" | "signup") => void;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onPasswordVisibleChange: (value: boolean) => void;
+  onDisplayNameChange: (value: string) => void;
+  onAccountNameChange: (value: string) => void;
+  onSubmit: (event: React.FormEvent) => void;
+}) {
+  return (
+    <div className="auth-shell">
+      <form className="auth-card" onSubmit={onSubmit}>
+        <div>
+          <div className="auth-kicker">THE GATEKEEPER</div>
+          <h1 className="auth-title">{mode === "login" ? "Sign in to your workspace" : "Create a workspace"}</h1>
+          <p className="auth-copy">
+            {mode === "login"
+              ? "The existing default workspace is available after login."
+              : "New workspaces start clean so each business or individual can keep separate settings and leads."}
+          </p>
+        </div>
+        <div className="auth-mode-tabs">
+          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => onModeChange("login")}>Login</button>
+          <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => onModeChange("signup")}>Sign up</button>
+        </div>
+        <div className="auth-fields">
+          {mode === "signup" && (
+            <input className="action-input" placeholder="Your name" value={displayName} onChange={(event) => onDisplayNameChange(event.target.value)} />
+          )}
+          <input className="action-input" placeholder="Email" type="email" value={email} onChange={(event) => onEmailChange(event.target.value)} required />
+          <div className="password-field">
+            <input
+              className="action-input"
+              placeholder="Password"
+              type={passwordVisible ? "text" : "password"}
+              value={password}
+              onChange={(event) => onPasswordChange(event.target.value)}
+              required
+            />
+            <button
+              type="button"
+              className="password-toggle"
+              onClick={() => onPasswordVisibleChange(!passwordVisible)}
+              aria-label={passwordVisible ? "Hide password" : "Show password"}
+              title={passwordVisible ? "Hide password" : "Show password"}
+            >
+              {passwordVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          {mode === "signup" && (
+            <input className="action-input" placeholder="Business or individual name" value={accountName} onChange={(event) => onAccountNameChange(event.target.value)} required />
+          )}
+        </div>
+        {error && <div className="auth-error">{error}</div>}
+        <button className="btn btn-approve auth-submit" type="submit" disabled={loading}>
+          {loading ? "WORKING..." : mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
+        </button>
+        {mode === "login" && <div className="auth-hint">Default local login: admin@soloa.local / soloa-admin</div>}
+      </form>
     </div>
   );
 }

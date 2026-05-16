@@ -41,28 +41,43 @@ class TwitterRelevanceJudge:
         self._model = model
         self.min_score = min_score
 
-    def judge(self, tweet_text: str, knowledge_block: str) -> TwitterRelevanceDecision:
+    def judge(self, tweet_text: str, knowledge_block: str, platform: str = "twitter") -> TwitterRelevanceDecision:
+        if platform == "youtube":
+            platform_label = "YouTube comment"
+            source_label = "YouTube context and comment"
+            marketing_note = "YouTube comments are public, slower, and more sensitive to spam. Accept only when a concise helpful reply can naturally address the commenter."
+        elif platform == "reddit":
+            platform_label = "Reddit thread reply"
+            source_label = "Reddit post context"
+            marketing_note = (
+                "Reddit is highly anti-marketing. Accept only when there is a genuine problem-solving angle, "
+                "and a product mention could be subtle and natural after useful advice."
+            )
+        else:
+            platform_label = "X/Twitter reply"
+            source_label = "Tweet"
+            marketing_note = "X/Twitter is less anti-marketing than Reddit, so a clear marketing opportunity is enough."
         prompt = f"""
-You are a practical lead-quality judge for X/Twitter reply and marketing opportunities.
+You are a practical lead-quality judge for {platform_label} and marketing opportunities.
 
 Company/product knowledge:
 {knowledge_block[:6000]}
 
-Tweet:
+{source_label}:
 {tweet_text[:1800]}
 
-Decide whether this tweet is a good opportunity to reply in a way that can naturally market this product.
+Decide whether this content is a good opportunity to reply in a way that can naturally market the business described in the company/product knowledge.
 
 Accept when BOTH are true:
-1. The author, topic, or conversation is in a market SoloaAI serves: creators, YouTubers, TikTokers, social media managers, ecommerce sellers, Amazon/Shopify merchants, marketers, founders, agencies, podcasters, musicians, or small businesses creating content.
-2. There is a natural opening to mention or demonstrate one SoloaAI capability without sounding random. This can be a problem, request, workflow, plan, milestone, creator/business discussion, product launch, content-production topic, or someone showing work that SoloaAI could improve or speed up.
+1. The author, topic, or conversation matches the target audience, market, use case, or problem space described in the company/product knowledge.
+2. There is a natural opening to mention, recommend, or demonstrate one relevant capability from the company/product knowledge without sounding random or forced. This can be a problem, request, workflow, plan, milestone, business discussion, product launch, or someone showing work that the configured business could improve or speed up.
 
-Do not require the tweet to ask for help. X/Twitter is less anti-marketing than Reddit, so a clear marketing opportunity is enough.
+{marketing_note}
 
-Reject generic AI news, memes, politics, sports, entertainment, job posts, celebrity bait, pure engagement bait, and posts where a SoloaAI reply would feel unrelated or forced. Also reject people only promoting their own unrelated product/event unless SoloaAI has a clear contextual angle.
+Reject generic news, memes, politics, sports, entertainment, job posts, celebrity bait, pure engagement bait, and posts where a reply for this configured business would feel unrelated or forced. Also reject people only promoting their own unrelated product/event unless the configured business has a clear contextual angle.
 
 Scoring rubric:
-- 90-100: explicit request, buying/search intent, or strong workflow pain directly solved by a named SoloaAI capability.
+- 90-100: explicit request, buying/search intent, or strong workflow pain directly solved by a named configured capability.
 - 80-89: clear marketing opening in a served audience, even if the author is not asking for help.
 - 70-79: relevant audience/topic with a plausible but weaker product angle.
 - 50-69: relevant topic but generic, vague, or hard to reply to without forcing the product.

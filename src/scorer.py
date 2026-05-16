@@ -6,6 +6,14 @@ import time
 
 def _extract_knowledge_terms(knowledge_block: str) -> list[str]:
     lines = [ln.strip("- ").strip().lower() for ln in (knowledge_block or "").splitlines()]
+    ignored_exact = {
+        "campaign/product knowledge",
+        "product knowledge",
+        "company/product knowledge",
+        "features",
+        "tools",
+        "overview",
+    }
     terms: list[str] = []
     for ln in lines:
         if not ln:
@@ -13,6 +21,8 @@ def _extract_knowledge_terms(knowledge_block: str) -> list[str]:
         # Keep compact capability phrases from knowledge bullets.
         parts = [p.strip() for p in re.split(r"[,:;]", ln) if p.strip()]
         for p in parts:
+            if p in ignored_exact:
+                continue
             if len(p) >= 4 and len(p.split()) <= 6:
                 terms.append(p)
     # Deduplicate while preserving order.
